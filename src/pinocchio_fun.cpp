@@ -79,7 +79,7 @@ void pinocchioFun::com_Mat_A_B(
     std::vector<Eigen::MatrixXd>& Mat_B
 )
 {
-    int N = static_cast<int>(nom_state.size()); // 预测步长
+    int N = static_cast<int>(nom_control.size()); // 预测步长
     int x_n = nom_state[0].size(); // 状态维度12
     int u_n = nom_control[0].size(); // 控制输入维度6
 
