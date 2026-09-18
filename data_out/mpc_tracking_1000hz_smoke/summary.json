@@ -1,0 +1,59 @@
+{
+  "status": "completed",
+  "control_dt_s": 0.001,
+  "horizon": 40,
+  "physics_dt_s": 0.001,
+  "gravity": [
+    0.0,
+    0.0,
+    -9.81
+  ],
+  "contacts_enabled": false,
+  "requested_steps": 100,
+  "qp_failures": 0,
+  "trajectory": "/home/yyy/20260901_ROBOT_NMPC/Robot_NMPC/data_in/circle_R200_joint_trajectory_SR4_V50.txt",
+  "timing_note": "cycle excludes viewer/sleep; simulation does not model control delay",
+  "samples": 100,
+  "simulated_time_s": 0.10000000000000007,
+  "joint_rmse_deg": [
+    1.442774989737551e-06,
+    2.6141609840224542e-06,
+    1.9313425468018703e-05,
+    7.178882290129643e-05,
+    7.663035657100115e-06,
+    6.972301559156027e-05
+  ],
+  "joint_max_abs_error_deg": [
+    2.35064320236931e-06,
+    5.853589060266789e-06,
+    4.2105422882428806e-05,
+    0.00015411796019399842,
+    1.644799975822642e-05,
+    0.00014969299276255688
+  ],
+  "velocity_rmse_rad_s": [
+    1.0527784739598408e-05,
+    4.937833871627046e-07,
+    2.7398484028227155e-06,
+    4.367919117822244e-06,
+    5.538425759791423e-07,
+    4.55054704840514e-06
+  ],
+  "tcp_rmse_mm": 5.8135911313882204e-05,
+  "tcp_max_error_mm": 0.00012779604375334256,
+  "max_abs_torque_Nm": [
+    0.05744193645673905,
+    27.060922124478836,
+    13.162099529905705,
+    2.087759320868316,
+    0.0767835915960662,
+    0.0004913482829569424
+  ],
+  "solve_mean_ms": 67.72012250985426,
+  "solve_p95_ms": 69.52281479716476,
+  "solve_max_ms": 72.30473899835488,
+  "solve_overrun_percent": 100.0,
+  "cycle_mean_ms": 67.78781705994334,
+  "cycle_max_ms": 72.38857300035306,
+  "cycle_overrun_percent": 100.0
+}

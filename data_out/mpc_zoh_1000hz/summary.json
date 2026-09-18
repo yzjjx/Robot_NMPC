@@ -1,0 +1,66 @@
+{
+  "status": "completed",
+  "control_dt_s": 0.001,
+  "horizon": 10,
+  "mpc_period_s": 0.1,
+  "initial_solve_ms": 40.604711990454234,
+  "mpc_deadline_misses": 0,
+  "physics_dt_s": 0.001,
+  "gravity": [
+    0.0,
+    0.0,
+    -9.81
+  ],
+  "contacts_enabled": false,
+  "requested_steps": 26133,
+  "qp_failures": 0,
+  "trajectory": "/home/yyy/20260901_ROBOT_NMPC/Robot_NMPC/data_in/circle_R200_joint_trajectory_SR4_V50.txt",
+  "timing_note": "1 kHz ZOH; asynchronous MPC targets next slot; late results discarded; soft realtime",
+  "wall_elapsed_s": 26.134936993999872,
+  "solve_mean_ms": 39.25294922981447,
+  "solve_p95_ms": 44.501761003630236,
+  "solve_max_ms": 58.73547599185258,
+  "solve_overrun_percent": 0.0,
+  "samples": 26133,
+  "simulated_time_s": 26.133000000008956,
+  "joint_rmse_deg": [
+    0.0005919687915568753,
+    0.0034311842938818306,
+    0.006286292732630286,
+    0.0018679851970492948,
+    0.0009868798660265926,
+    0.0011324134710592884
+  ],
+  "joint_max_abs_error_deg": [
+    0.003658688617366736,
+    0.007075402180622636,
+    0.012855674908070913,
+    0.006168760745195062,
+    0.002985006498372223,
+    0.006022136935354548
+  ],
+  "velocity_rmse_rad_s": [
+    0.00011171469618433389,
+    0.00012649211967746577,
+    0.0007799867972259881,
+    0.00099717022293271,
+    0.0009497697134781918,
+    0.0009919115327005487
+  ],
+  "tcp_rmse_mm": 0.06741849840382495,
+  "tcp_max_error_mm": 0.12870886327183015,
+  "max_abs_torque_Nm": [
+    0.16187036717747008,
+    27.12481513614332,
+    13.181888889648079,
+    2.239472789055404,
+    0.08866960121141604,
+    0.0004946440780390032
+  ],
+  "cycle_mean_ms": 0.09000573365296334,
+  "cycle_max_ms": 3.8316900026984513,
+  "cycle_overrun_percent": 0.0038265794206558757,
+  "max_wall_lag_ms": 8.59690600191243,
+  "wall_lag_over_1ms_percent": 7.377645123024529,
+  "torque_updates_including_initial": 262
+}

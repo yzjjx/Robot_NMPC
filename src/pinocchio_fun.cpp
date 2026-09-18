@@ -1,11 +1,18 @@
 #include "pinocchio_fun.h"
 
+#include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 #include <pinocchio/algorithm/rnea.hpp>
 #include <pinocchio/algorithm/aba.hpp>
 #include <pinocchio/parsers/urdf.hpp>
 
+// 需要在h文件新建一个pinocchioFun的类class
+// 这个类有三个核心功能，分别为rnea计算、aba计算与矩阵计算
+
+
+// 首先为构造函数
 pinocchioFun::pinocchioFun(
     const std::string& urdf_path)
     :model(),data(model)
@@ -19,6 +26,7 @@ pinocchioFun::pinocchioFun(
     data = pinocchio::Data(model);
 }
 
+// 构造函数的部分扩展，构造函数为初始化参数，这部分的函数可以修改构造函数的大小
 void pinocchioFun::set_forward_diff_step(
     double q_step_,
     double dq_step_,
@@ -29,6 +37,7 @@ void pinocchioFun::set_forward_diff_step(
     tau_step = tau_step_;
 }
 
+// RNEA计算
 Eigen::VectorXd pinocchioFun::compute_rnea(
     const Eigen::VectorXd& q,
     const Eigen::VectorXd& dq,
@@ -45,6 +54,8 @@ Eigen::VectorXd pinocchioFun::compute_rnea(
     return tau;
 }
 
+
+// ABA计算，ABA是根据当前q、dq和tau输出ddq
 Eigen::VectorXd pinocchioFun::compute_aba(
     const Eigen::VectorXd& state,
     const Eigen::VectorXd& control,
@@ -59,7 +70,7 @@ Eigen::VectorXd pinocchioFun::compute_aba(
     Eigen::VectorXd q = state.head(DOF);
     Eigen::VectorXd dq = state.tail(DOF);
 
-    // 使用Pinocchio计算ABA得到关节加速度
+    // 使用Pinocchio计算ABA得到关节加速度，control就是tau
     Eigen::VectorXd ddq = pinocchio::aba(model, data, q, dq, control);
 
     // 使用半隐式欧拉离散化得到下一时刻的状态
@@ -70,6 +81,25 @@ Eigen::VectorXd pinocchioFun::compute_aba(
     return next_state;
 }
 
+
+// 一个预测区间内保持力矩不变，以不超过 1 ms 的步长积分。
+Eigen::VectorXd pinocchioFun::compute_held_state(
+    const Eigen::VectorXd& state,
+    const Eigen::VectorXd& control,
+    double duration)
+{
+    if(!std::isfinite(duration) || duration < 0) {
+        throw std::invalid_argument("Prediction duration must be finite and nonnegative.");
+    }
+    const int steps = std::max(1, static_cast<int>(std::ceil(duration / 0.001)));
+    Eigen::VectorXd predicted = state;
+    for(int i = 0; i < steps; ++i) {
+        predicted = compute_aba(predicted, control, duration / steps);
+    }
+    return predicted;
+}
+
+// 矩阵计算
 void pinocchioFun::com_Mat_A_B(
     const std::vector<Eigen::VectorXd>& nom_state,
     const std::vector<Eigen::VectorXd>& nom_control,
@@ -83,6 +113,7 @@ void pinocchioFun::com_Mat_A_B(
     int x_n = nom_state[0].size(); // 状态维度12
     int u_n = nom_control[0].size(); // 控制输入维度6
 
+    // 取出当前这个预测步长的状态矩阵（12）和控制输入（6）
     for (int i = 0; i < N; i++) {
         const Eigen::VectorXd& x_bar = nom_state[i];
         const Eigen::VectorXd& u_bar = nom_control[i];
@@ -91,14 +122,14 @@ void pinocchioFun::com_Mat_A_B(
         for(int j = 0; j < x_n; j++) {
             Eigen::VectorXd x_perturbed = x_bar;
             x_perturbed(j) += q_step; // 对状态向量的每个元素进行扰动
-            Eigen::VectorXd x_next_perturbed = compute_aba(x_perturbed, u_bar, Ts);
+            Eigen::VectorXd x_next_perturbed = compute_held_state(x_perturbed, u_bar, Ts);
             Mat_A[i].col(j) = (x_next_perturbed - x_bar_next) / q_step; // 计算雅可比矩阵A的每一列
         }
 
         for(int j = 0; j < u_n; j++) {
             Eigen::VectorXd u_perturbed = u_bar;
             u_perturbed(j) += tau_step; // 对控制输入向量的每个元素进行扰动
-            Eigen::VectorXd x_next_perturbed = compute_aba(x_bar, u_perturbed, Ts);
+            Eigen::VectorXd x_next_perturbed = compute_held_state(x_bar, u_perturbed, Ts);
             Mat_B[i].col(j) = (x_next_perturbed - x_bar_next) / tau_step; // 计算雅可比矩阵B的每一列
         }
         

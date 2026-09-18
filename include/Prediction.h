@@ -15,7 +15,8 @@ Eigen::VectorXd Prediction(
     const Eigen::VectorXd& tau_lower,
     const Eigen::VectorXd& tau_upper,
     int N,
-    int p
+    int p,
+    bool* qp_success = nullptr
 );
 
 #endif

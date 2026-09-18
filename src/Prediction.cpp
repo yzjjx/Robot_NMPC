@@ -31,7 +31,8 @@ Eigen::VectorXd Prediction(
     const Eigen::VectorXd& tau_lower,
     const Eigen::VectorXd& tau_upper,
     int N,
-    int p
+    int p,
+    bool* qp_success
 ) 
 {
     int nV = N*p;
@@ -75,6 +76,10 @@ Eigen::VectorXd Prediction(
     );
 
     Eigen::VectorXd delta_U = Eigen::VectorXd::Zero(nV);
+
+    if(qp_success) {
+        *qp_success = (status == qpOASES::SUCCESSFUL_RETURN);
+    }
 
     if(status == qpOASES::SUCCESSFUL_RETURN)
     {

@@ -38,6 +38,12 @@ public:
         const Eigen::VectorXd& control,
         double Ts);
 
+    // 力矩在 duration 内保持不变，用不超过 1 ms 的小步长积分。
+    Eigen::VectorXd compute_held_state(
+        const Eigen::VectorXd& state,
+        const Eigen::VectorXd& control,
+        double duration);
+
     // 使用前向差分计算雅可比矩阵A和矩阵B
     void com_Mat_A_B(
         const std::vector<Eigen::VectorXd>& nom_state,

@@ -131,3 +131,23 @@ $$
 因此，真正的预测状态为：$X = \bar X+\Delta  X$，即 $X=\bar X +\Phi \delta x_0+\Gamma \Delta U$,注意此时的U再下一步可以算出
 
 6、构造代价函数，求解输出为 $\Delta U$ ，并且可以将代价函数转换为QP问题求解
+
+# 部分代码解释
+
+## A与B的矩阵计算
+
+代码来自： `Robot_NMPC/src/pinocchio_fun.cpp` ，函数 `com_Mat_A_B`
+
+控制器的状态维度为12维（输入位置和输入速度），控制维度为6维（输出力矩）
+
+在这个代码的计算ABA函数的代码中，根据非线性机器人动力学可以得到： $ x_{k+1}=f(x_k,u_k) $ ，下一步就需要线性化得到 $ x_{k+1}=Ax_k+Bu_k $，也就是在当前轨迹附近进行局部线性化，即： $ \delta x_{k+1}=A\delta x_{k}+B\delta u_{k} $ ，这里有：
+
+$$
+\begin{matrix}A=\frac{\delta f}{\delta x} 
+ \\
+B=\frac{\delta f}{\delta u} 
+\end{matrix}
+$$
+
+使用前向有限差分来进行计算，在每一个预测点都要计算这个矩阵，也就是Linear Time-Varying model，LTV 模型
+

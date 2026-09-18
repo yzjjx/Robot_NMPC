@@ -15,6 +15,7 @@ private:
     int N;     // 预测步长
 
     bool first_control_cycle; // 标记是否为第一次控制周期
+    bool last_qp_success = false; // 供 Python 判断本次 QP 是否求解成功
 
     Eigen::MatrixXd Q; // 状态权重矩阵
     Eigen::MatrixXd F; // 终端状态权重矩阵
@@ -45,7 +46,12 @@ private:
     void calculate_Mat_AB();
 
 public:
-    explicit ROKAE_NMPC(pinocchioFun& dynamics);
+    explicit ROKAE_NMPC(pinocchioFun& dynamics,
+                       double control_dt = 0.001, int prediction_steps = 40);
+
+    double timestep() const { return Ts; }
+    int horizon() const { return N; }
+    bool qp_success() const { return last_qp_success; }
 
     //LTC-MPC控制接口，输入x_ref和ddq_ref，输出tau
     Eigen::VectorXd compute_control(

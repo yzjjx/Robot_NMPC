@@ -4,16 +4,21 @@
 #include "Prediction.h"
 
 #include <iostream>
+#include <cmath>
+#include <stdexcept>
 
-ROKAE_NMPC::ROKAE_NMPC(pinocchioFun& dynamics)
+ROKAE_NMPC::ROKAE_NMPC(pinocchioFun& dynamics, double control_dt, int prediction_steps)
     : dynamics(dynamics)
 {
     // 控制器基本参数
-    Ts = 0.01;  // 控制周期
+    if(!std::isfinite(control_dt) || control_dt <= 0 || prediction_steps < 1) {
+        throw std::invalid_argument("MPC timestep and horizon must be positive.");
+    }
+    Ts = control_dt;  // 每段力矩保持的时间；可与底层发送周期不同
     DOF = 6;    // 自由度
     x_n = 12;   // 状态维度,分别为关节位置和关节速度
     u_n = 6;    // 控制输入维度,关节力矩,这里控制输入指的是控制器输入到机器人里面的
-    N = 20;     // 预测步长
+    N = prediction_steps;
 
     first_control_cycle = true;// 标记是否为第一次控制周期
 
@@ -23,7 +28,7 @@ ROKAE_NMPC::ROKAE_NMPC(pinocchioFun& dynamics)
     Q = q_diag.asDiagonal(); // 状态权重矩阵
 
     F = 2.0*Q; // 终端状态权重矩阵
-    R = 0.01*Eigen::MatrixXd::Identity(u_n, u_n); // 控制输入权重矩阵
+    R = 0.01*Eigen::MatrixXd::Identity(u_n, u_n); // 控制输入权重矩阵 
 
     tau_lower = Eigen::VectorXd::Constant(u_n, -300); // 控制输入下界
     tau_upper = Eigen::VectorXd::Constant(u_n, 300); // 控制输入上界
@@ -73,7 +78,7 @@ void ROKAE_NMPC::generate_nom_traj(
 
     // 使用ABA计算得到名义预测状态序列X_bar
     for(int i = 0; i < N; ++i) {
-        nominal_state_next[i] = dynamics.compute_aba(
+        nominal_state_next[i] = dynamics.compute_held_state(
             nominal_state[i],
             nominal_tau[i],
             Ts
@@ -162,7 +167,8 @@ Eigen::VectorXd ROKAE_NMPC::compute_control(
         tau_lower,
         tau_upper,
         N,
-        u_n
+        u_n,
+        &last_qp_success
     );
 
     // U = U_bar + delta_U
@@ -184,4 +190,3 @@ Eigen::VectorXd ROKAE_NMPC::compute_control(
     // 滚动时域控制之执行第一步
     return prediction_tau[0];
 }
-
