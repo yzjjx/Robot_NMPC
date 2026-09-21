@@ -456,3 +456,57 @@ mpc = rokae_mpc.MPCController(
 )
 ```
 
+## Mujoco环境仿真代码实例
+
+函数1解释：
+
+```python
+# 将轨迹文件整理成控制器能够使用的数据
+def load_reference(dt, padding_steps):
+    """按仿真步长插值，并用速度对时间求导得到加速度。"""
+
+    # 读取文件，skiprows=1表示跳过第一行表头
+    raw = np.loadtxt(TRAJECTORY, skiprows=1)
+
+    # 判断列数是否合格
+    if raw.ndim != 2 or raw.shape[1] != 13 or len(raw) < 3:
+        raise ValueError("轨迹文件需要时间、6 个位置、6 个速度，共 13 列。")
+
+    if not np.isfinite(raw).all():
+        raise ValueError("轨迹数据必须有限。")
+
+    # 输入保证均匀采样，因此只需用前两个时间点确定固定周期。
+    trajectory_dt = raw[1, 0] - raw[0, 0]
+    if trajectory_dt <= 0:
+        raise ValueError("轨迹采样周期必须为正数。")
+
+    q = raw[:, 1:7]    # 六个关节的位置
+    dq = raw[:, 7:13]  # 六个关节的速度
+    ddq = np.gradient(dq, trajectory_dt, axis=0, edge_order=2)
+    steps = len(raw) - 1  # 相邻两个状态之间对应一个仿真步
+
+    # 周期相同（当前均为 1 ms）时无需插值；不同时才按仿真时刻重采样。
+    if not np.isclose(dt, trajectory_dt, rtol=1e-9, atol=1e-12):
+        source_time = np.arange(len(raw)) * trajectory_dt
+        steps = int(np.ceil(source_time[-1] / dt))
+        sample_time = np.arange(steps + 1) * dt
+        q = np.column_stack([
+            np.interp(sample_time, source_time, q[:, j]) for j in range(6)
+        ])
+        dq = np.column_stack([
+            np.interp(sample_time, source_time, dq[:, j], right=0.0) for j in range(6)
+        ])
+        ddq = np.column_stack([
+            np.interp(sample_time, source_time, ddq[:, j], right=0.0) for j in range(6)
+        ])
+
+    # 为末尾的 MPC 预测补点：位置保持末点，速度和加速度补零。
+    padding = ((0, padding_steps), (0, 0))  # 只在末尾补行，不增加列
+    q = np.pad(q, padding, mode="edge")
+    dq = np.pad(dq, padding, mode="constant")
+    ddq = np.pad(ddq, padding, mode="constant")
+    return np.column_stack((q, dq)), ddq, steps
+```
+
+该函数输入为dt:仿真采样间隔，padding_steps：轨迹末尾需要补充多少个采样点，输出为state_ref表示参考位置和速度，ddq_ref表示参考加速度，steps表示实际要运行多少个仿真步
+
