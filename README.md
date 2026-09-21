@@ -151,3 +151,267 @@ $$
 
 使用前向有限差分来进行计算，在每一个预测点都要计算这个矩阵，也就是Linear Time-Varying model，LTV 模型
 
+### 什么是有限差分
+对于一个简单函数：$ y=f(x) $，理论导数为：
+
+$$
+
+f'(x)=\lim_{h \to 0} \frac{f(x+h)-f(x)}{h} 
+
+$$
+
+在计算机里面，将 $ h=10^{-6} $ ,就可以得到前向有限差分的计算公式：
+
+$$
+
+f'(x)\approx \frac{f(x+h)-f(x)}{h} 
+
+$$
+
+## 预测矩阵组装
+该部分主要在代码文件： `src\MPC_Matrices.cpp`
+
+在前面已经得到了每个预测点附近的局部线性模型，下面就要将未来第1步、第2步...到第N步的状态全部写为“当前状态 $\Delta{x_0}$ ”和“未来所有控制量 $ \Delta{U} $ ”的函数，即
+
+$$
+\Delta X = \Phi \Delta x_0  +\Gamma \Delta U
+$$
+
+未来所有修正控制量为：
+
+$$
+\Delta U=\begin{bmatrix}\Delta u_0
+\\
+ \Delta u_1\\
+ ...\\
+\Delta u_{19}
+\end{bmatrix}
+$$
+
+未来所有的状态组合矩阵为：
+
+$$
+\Delta X=\begin{bmatrix}\Delta x_1
+\\
+ \Delta x_2\\
+ ...\\
+\Delta x_{20}
+\end{bmatrix}
+$$
+
+已知结果 $ \Delta X $ 为240 * 1的矩阵，输入 $x_0$ 为12 * 1的矩阵，$\Delta U$ 为120 * 1的矩阵，可以得到：
+
+$$
+\left\{\begin{matrix}
+ \Phi \in \mathbb{R}^{240\times 12} \\
+\Gamma \in \mathbb{R}^{240\times 120}
+\end{matrix}\right.
+$$
+
+其中，$ \Phi $ 用来描述当前状态误差如何传播到未来； $\Gamma$ 用来描述未来控制量如何影响未来状态
+
+下面解释代码：
+
+```C++
+for(int i = 0; i < N; i++){
+    //delta_x_i = A_i*delta_x_{i}+B_i*delta_u_i
+    Phi_i = Mat_A[i] * Phi_i;
+    Gamma_i = Mat_A[i] * Gamma_i;
+    Gamma_i.block(0, i*p, n, p) += Mat_B[i];
+    
+    Phi.block(i*n, 0, n, n) = Phi_i;
+    Gamma.block(i*n, 0, n, N*p) = Gamma_i;
+}
+```
+
+第一步的计算公式：
+
+$$
+\Delta x_1 = A_0\Delta x_0 +  B_0\Delta u_0
+$$
+
+第二步的计算公式：
+
+$$
+\Delta x_2 = A_1\Delta x_1 +  B_1\Delta u_1
+$$
+
+代入第一步的计算公式，可以得到：
+
+$$
+\Delta x_2 = A_1 ( A_0\Delta x_0 +  B_0\Delta u_0 )+  B_1\Delta u_1
+$$
+
+展开可以得到：
+
+$$
+\Delta x_2 = A_1 A_0\Delta x_0 + A_1 B_0\Delta u_0 +  B_1\Delta u_1
+$$
+
+第三步的计算公式：
+
+$$
+\Delta x_3 = A_2\Delta x_2 +  B_2\Delta u_2
+$$
+
+继续代入，可以得到：
+
+$$
+\Delta x_3 = A_2 A_1 A_0\Delta x_0 +A_2 A_1 B_0\Delta u_0 + A_2 B_1\Delta u_1 + B_2 \Delta u_2
+$$
+
+最终可得：
+
+$$
+\Delta X=\begin{bmatrix}
+ A_0\\
+A_1 A_0 \\
+A_2 A_1 A_0
+\end{bmatrix}\Delta x_0+\begin{bmatrix}
+ B_0 &0  & 0\\
+A_1B_0  & B_1 &0 \\
+A_2A_1B_0  & A_2B_1 &B_2
+\end{bmatrix}\Delta U
+$$
+
+首先创建大矩阵Phi，之后Phi_i就变为：
+
+$$
+\Phi_i=A_0I=A_0
+$$
+
+第二次循环变为：
+
+$$
+\Phi_i=A_1A_0
+$$
+
+第三次循环变为：
+
+$$
+\Phi_i=A_2A_1A_0
+$$
+
+对于gamma，第一次循环，当i=0时：
+
+$$
+\Phi_i=A_0I=A_0
+$$
+
+$$
+\Gamma_i = A_0\times0 = 0
+$$
+
+$$
+\Gamma_i = \begin{bmatrix}
+ B_0 & 0 &0
+\end{bmatrix}
+$$
+
+第二次循环，有：
+
+$$
+\Gamma_i = A_1B_0
+$$
+
+$$
+\Gamma_i = \begin{bmatrix}
+  A_1B_0 & 0 &0
+\end{bmatrix}
+$$
+
+然后下一步， ` Gamma_i.block(0, i*p, n, p) += Mat_B[i];` ，使得上面的矩阵进一步变为：
+
+$$
+\Gamma_i = \begin{bmatrix}
+  A_1B_0 & B_1 &0
+\end{bmatrix}
+$$
+
+第三次循环同理
+
+随后，就是建立矩阵Q和终端矩阵F，其中Q为对角矩阵，前6个数字对应关节位置误差，后6个数字对应关节速度误差，数字越大说明对这个地方的误差越在意
+
+F矩阵为终端权重，是希望如果中间可以有一定误差，但是预测区间末端希望机器人尽可能接近目标，因此可以选择F>Q
+
+R矩阵用来惩罚控制量，如果R很小，则MPC为了减少轨迹误差，可以非常激进的改变控制力矩，因此R更看重控制平滑、控制的代价、能量损耗
+
+## 代价函数
+MPC的代价函数为：
+
+$$
+J=\sum_{k=1}^{N-1} \Delta x_k^TQ\Delta x_k+\Delta x_N^TF\Delta x_N+\sum_{k=1}^{N-1}\Delta u_k^TR\Delta u_k
+$$
+
+可以得到：
+
+$$
+J=\Delta X^TQ_{bar}\Delta X+\Delta U^TR_{bar}\Delta U
+$$
+
+已知：
+
+$$
+\Delta X = \Phi \Delta x_0  +\Gamma \Delta U
+$$
+
+所以可以得到：
+
+$$
+J=( \Phi \Delta x_0  +\Gamma \Delta U)^TQ_{bar}( \Phi \Delta x_0  +\Gamma \Delta U)+\Delta U^TR_{bar}\Delta U
+$$
+
+继续展开，可以得到：
+
+$$
+J = \Delta U^T(\Gamma^TQ_{bar}\Gamma+R_{bar})\Delta U+2\Delta x_0^T\Phi^TQ_{bar}\Gamma\Delta U
+$$
+
+这里可以构造QP规划，为：
+
+$$
+\min_{\Delta U}\frac{1}{2}  \Delta U^TH\Delta U+g^T\Delta U
+$$
+
+可以构造：
+
+$$
+H = 2(\Gamma^TQ_{bar}\Gamma+R_{bar})
+$$
+
+$$
+g = 2\Gamma^TQ_{bar}\Phi\Delta x_0
+$$
+
+这时就可以写函数Prediction，即代码文件 `src\Prediction.cpp`
+
+## 控制器代码
+代码来自 `src\NMPC_control.cpp`  
+
+该代码主要是输入机器人当前轨迹和状态，输出当前应该发送的六维关节力矩
+
+将所有模块进行整合，控制器总体步骤为：非线性预测、轨迹线性化、QP优化、只执行第一步，也就是再每个控制周期只在线性化轨迹附近求一次QP修正，而不是在一个控制周期内部不断收敛直到完全收敛
+
+首先就是构造函数，这里用到了参数 `nominal_tau`，为当前这一轮优化围绕的名义控制轨迹，也就是说，QP并不是直接从0开始求解U，而是从已有的一个控制序列U进行较小的修正
+
+```C++
+void ROKAE_NMPC::initial_nom_ctrl(
+    const std::vector<Eigen::VectorXd>& control_ref
+)
+{
+    for(int i = 0; i < N; ++i) {
+        nominal_tau[i] = control_ref[i];
+    }
+}
+```
+
+因为第一个控制周期没有上一轮的最优解，因此第一个控制周期使用目标状态的RNEA力矩初始化U_bar,也就是预测区域内部20个参考状态通过RNEA计算得到的参考力矩
+
+## 机器人零力矩Mujoco仿真
+
+首先需要在xml代码中，将重力项改为0，具体代码为 `xml\ROKAE_SR4.XML` 的 ` <option gravity="0 0 0" timestep="0.02"/>` 正常为-9.81，这里改为0
+
+详细零力矩仿真的代码可以查看 `python_code\zero_torque_sim.py`  可以查看具体注释了解详细内容
+
+下面附上仿真图
+

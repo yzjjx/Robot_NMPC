@@ -13,6 +13,7 @@ MPC_Matrices compute_mpc_matrices(
     int p = Mat_B[0].cols(); // 控制输入维度
 
     // Delta X = phi*Delta_x0+Gamma*Delta_U
+    // 这里n = 12， p = 6
     Eigen::MatrixXd Phi = Eigen::MatrixXd::Zero(N*n, n);
     Eigen::MatrixXd Gamma = Eigen::MatrixXd::Zero(N*n, N*p);
 
@@ -20,7 +21,7 @@ MPC_Matrices compute_mpc_matrices(
     Eigen::MatrixXd Gamma_i = Eigen::MatrixXd::Zero(n, N*p);
 
     for(int i = 0; i < N; i++){
-        //delta_x_i = A_i*delta_x_{i-1}+B_i*delta_u_i
+        //delta_x_i = A_i*delta_x_{i}+B_i*delta_u_i
         Phi_i = Mat_A[i] * Phi_i;
         Gamma_i = Mat_A[i] * Gamma_i;
         Gamma_i.block(0, i*p, n, p) += Mat_B[i];

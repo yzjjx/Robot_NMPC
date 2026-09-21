@@ -82,16 +82,20 @@ Eigen::VectorXd pinocchioFun::compute_aba(
 }
 
 
-// 一个预测区间内保持力矩不变，以不超过 1 ms 的步长积分。
+// 一个预测区间内保持力矩不变，以不超过 1 ms 的步长积分
+// 给定当前状态和一个固定力矩，预测duration秒后机器人到哪里
+// 在一个预测区间内，控制输入保持不变，即零阶保持器
 Eigen::VectorXd pinocchioFun::compute_held_state(
     const Eigen::VectorXd& state,
     const Eigen::VectorXd& control,
     double duration)
 {
     if(!std::isfinite(duration) || duration < 0) {
-        throw std::invalid_argument("Prediction duration must be finite and nonnegative.");
+        throw std::invalid_argument("Prediction duration not ok");
     }
+    // ceil是向上取整
     const int steps = std::max(1, static_cast<int>(std::ceil(duration / 0.001)));
+    // 预测加速度ddq
     Eigen::VectorXd predicted = state;
     for(int i = 0; i < steps; ++i) {
         predicted = compute_aba(predicted, control, duration / steps);

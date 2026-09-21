@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 namespace py = pybind11;
+// 这样pybind11::init就等价于py::init
 
 // 把动力学对象和控制器放在一起，保证 dynamics 的生命周期足够长。
 class MPCController {
@@ -28,6 +29,7 @@ public:
         return dynamics.compute_held_state(state, tau, duration);
     }
 
+    // 关键函数
     Eigen::VectorXd compute_control(
         const Eigen::VectorXd& state,
         const Eigen::MatrixXd& state_ref,
