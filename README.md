@@ -415,3 +415,44 @@ void ROKAE_NMPC::initial_nom_ctrl(
 
 下面附上仿真图
 
+<div align="center">
+    <img src="fig\zero_tau.gif">
+    <br>
+    零力矩输入仿真（重力补偿+摩擦补偿）
+</div>
+
+## 通过pybind进行Mujoco仿真
+
+因为Mujoco的原生simulate环境不支持C++，因此用pybind生成.so文件作为动态链接库，放到python环境下进行仿真执行，具体链接文件查看 `src\python_bindings.cpp`
+
+也就是说，以后需要在python环境下调用C++的控制器，都可以使用这种方法
+
+pybind的基本语法为： `PYBIND11_MODULE(test, m)` 表示创建一个Python模块，名字为test
+
+`m.def("add",&add)` 表示将C++的add()函数注册给Python，在Python中也叫add
+
+之后再python代码中 `import test` 就可以动态加载.so文件
+
+```c++
+class MPCController {
+    pinocchioFun dynamics;
+    ROKAE_NMPC controller;
+```
+
+因为NMPC与动力学是绑定在一起的，在创建NMPC控制器的时候，需要pinocchioFun建立动力学，因此需要创建一个class
+
+```c++
+explicit MPCController(const std::string& urdf_path, double timestep, int horizon)
+    : dynamics(urdf_path), controller(dynamics, timestep, horizon) {}
+```
+
+这个构造函数，表示在python代码后期加入pybind的动态链接文件时，需要输入
+
+```python
+mpc = rokae_mpc.MPCController(
+    "SR4.urdf",
+    0.001,
+    40
+)
+```
+

@@ -1,4 +1,4 @@
-"""1000 Hz 力矩输入 + 后台 MPC + 零阶保持，按真实时间运行 MuJoCo。"""
+"""按 XML 时间步长运行 MuJoCo，并用后台 MPC 和零阶保持跟踪轨迹。"""
 
 import argparse
 from contextlib import nullcontext
@@ -16,11 +16,10 @@ from rokae_mpc import MPCController
 
 ROOT = Path(__file__).resolve().parent.parent
 TRAJECTORY = ROOT / "data_in" / "circle_R200_joint_trajectory_SR4_V50.txt"
-INPUT_DT = 0.001  # 向 MuJoCo 输入力矩的周期，1000 Hz。
 
 
-def load_reference(dt, horizon):
-    """按 MPC 的周期插值；原文件没有加速度，用速度对时间求导得到。"""
+def load_reference(dt, padding_steps):
+    """按仿真步长插值，并用速度对时间求导得到加速度。"""
     raw = np.loadtxt(TRAJECTORY, skiprows=1)
     if raw.ndim != 2 or raw.shape[1] != 13 or len(raw) < 3:
         raise ValueError("轨迹文件需要时间、6 个位置、6 个速度，共 13 列。")
@@ -29,7 +28,7 @@ def load_reference(dt, horizon):
     source_time = raw[:, 0] - raw[0, 0]
     acceleration = np.gradient(raw[:, 7:13], source_time, axis=0, edge_order=2)
     steps = int(np.ceil(source_time[-1] / dt))
-    sample_time = np.arange(steps + horizon + 1) * dt
+    sample_time = np.arange(steps + padding_steps + 1) * dt
 
     q = np.column_stack([
         np.interp(sample_time, source_time, raw[:, j]) for j in range(1, 7)
@@ -100,7 +99,7 @@ def save_results(rows, updates, output_dir, summary):
             "cycle_max_ms": float(np.max(result[:, 32])),
             "cycle_overrun_percent": float(100 * np.mean(result[:, 32] > dt_ms)),
             "max_wall_lag_ms": float(np.max(result[:, 40])),
-            "wall_lag_over_1ms_percent": float(100 * np.mean(result[:, 40] > dt_ms)),
+            "wall_lag_over_step_percent": float(100 * np.mean(result[:, 40] > dt_ms)),
             "torque_updates_including_initial": int(np.sum(result[:, 39])),
         })
 
@@ -128,7 +127,8 @@ def save_results(rows, updates, output_dir, summary):
             ax.step(result[:, 0] - summary["control_dt_s"], result[:, 25+j], where="post")
             ax.set_ylabel(f"tau{j+1} (Nm)")
             ax.grid(True)
-        axes[0].set_title("1000 Hz torque input with zero-order hold")
+        axes[0].set_title(
+            f"{1 / summary['control_dt_s']:g} Hz torque input with zero-order hold")
         axes[-1].set_xlabel("Time (s)")
         fig.tight_layout()
         fig.savefig(output_dir / "torque_hold.png", dpi=150)
@@ -155,17 +155,20 @@ def main():
     parser.add_argument("--contacts", action="store_true", help="保留 XML 网格的接触作用")
     parser.add_argument("--mpc-period", type=float, default=0.1, help="MPC 更新周期，默认 0.1 秒")
     parser.add_argument("--horizon", type=int, default=10, help="MPC 预测步数，默认 10")
-    parser.add_argument("--output", type=Path, default=ROOT / "data_out" / "mpc_zoh_1000hz")
+    parser.add_argument("--output", type=Path, default=ROOT / "data_out" / "mpc_zoh")
     args = parser.parse_args()
     if args.duration is not None and (not np.isfinite(args.duration) or args.duration <= 0):
         parser.error("--duration 必须为正数。")
 
-    dt = INPUT_DT
+    model = mujoco.MjModel.from_xml_path(str(ROOT / "xml" / "ROKAE_SR4.XML"))
+    dt = float(model.opt.timestep)
+    if not np.isfinite(dt) or dt <= 0:
+        raise ValueError("XML 中的 timestep 必须为正数。")
     if not np.isfinite(args.mpc_period) or args.mpc_period < dt or args.horizon < 1:
-        parser.error("MPC 周期必须至少为 1 ms，预测步数必须为正数。")
+        parser.error(f"MPC 周期必须至少为 XML 时间步长 {1000*dt:g} ms，预测步数必须为正数。")
     stride = round(args.mpc_period / dt)
     if not np.isclose(stride * dt, args.mpc_period, rtol=0, atol=1e-10):
-        parser.error("MPC 周期必须为 1 ms 的整数倍。")
+        parser.error(f"MPC 周期必须为 XML 时间步长 {1000*dt:g} ms 的整数倍。")
     controller = MPCController(str(ROOT / "urdf" / "ROKAE_SR4.urdf"),
                                timestep=stride * dt, horizon=args.horizon)
     horizon = controller.horizon
@@ -173,9 +176,7 @@ def main():
     if args.duration is not None:
         steps = min(steps, int(np.ceil(args.duration / dt)))
 
-    model = mujoco.MjModel.from_xml_path(str(ROOT / "xml" / "ROKAE_SR4.XML"))
     model.opt.gravity[:] = [0, 0, -9.81]  # 与 Pinocchio 控制模型一致。
-    model.opt.timestep = dt  # 每 1 ms 写入力矩；没有新结果时重复写入旧力矩。
     if not args.contacts:
         # 原 XML 的底座/第一连杆网格重叠；先评估自由空间动力学跟踪。
         model.opt.disableflags |= mujoco.mjtDisableBit.mjDSBL_CONTACT
@@ -203,7 +204,7 @@ def main():
                "physics_dt_s": model.opt.timestep, "gravity": model.opt.gravity.tolist(),
                "contacts_enabled": args.contacts, "requested_steps": steps,
                "qp_failures": 0, "trajectory": str(TRAJECTORY),
-               "timing_note": "1 kHz ZOH; asynchronous MPC targets next slot; late results discarded; soft realtime"}
+               "timing_note": "XML timestep; ZOH; asynchronous MPC targets next slot; late results discarded; soft realtime"}
     window = nullcontext(None) if args.headless else mujoco.viewer.launch_passive(model, data)
     print(f"力矩输入：{1/dt:g} Hz，MPC：{1/controller.timestep:g} Hz，"
           f"预测时长：{horizon*controller.timestep:g} s，零阶保持")
@@ -215,7 +216,7 @@ def main():
             if viewer is not None and not viewer.is_running():
                 summary["status"] = "window_closed"
                 break
-            # 以绝对时钟安排 1 ms 步进，后台求解期间主循环照常运行。
+            # 以绝对时钟安排仿真步进，后台求解期间主循环照常运行。
             deadline = wall_start + k * dt
             time.sleep(max(0.0, deadline - time.perf_counter()))
             cycle_start = time.perf_counter()
@@ -249,7 +250,7 @@ def main():
                         solve_next, controller, np.r_[data.qpos, data.qvel], tau.copy(),
                         state_ref[pending_tick:stop+1:stride], ddq_ref[pending_tick:stop:stride])
 
-            # 这里每 1 ms 都执行；MPC 忙时 tau 保持不变，就是零阶保持。
+            # 每个 XML 时间步都执行；MPC 忙时 tau 保持不变，就是零阶保持。
             data.ctrl[:] = tau
             mujoco.mj_step(model, data)
             mujoco.mj_forward(model, data)  # 更新积分后的位置对应的 tool_site。
@@ -271,7 +272,7 @@ def main():
             if (k+1) % round(1/dt) == 0:
                 print(f"t={data.time:.1f} s，最大关节误差="
                       f"{np.max(np.abs(np.rad2deg(data.qpos-target[:6]))):.4f} deg")
-            # 图形界面只需约 60 Hz，力矩输入仍是 1000 Hz。
+            # 图形界面只需约 60 Hz，不影响 XML 中设置的仿真步长。
             if viewer is not None and time.perf_counter() >= next_render:
                 viewer.sync()
                 next_render = time.perf_counter() + 1/60
