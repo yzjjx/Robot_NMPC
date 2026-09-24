@@ -11,8 +11,7 @@
 // 需要在h文件新建一个pinocchioFun的类class
 // 这个类有三个核心功能，分别为rnea计算、aba计算与矩阵计算
 
-
-// 首先为构造函数
+// 首先为构造函数，构造函数是创建一个对象时，自动执行的一段初始化程序
 pinocchioFun::pinocchioFun(
     const std::string& urdf_path)
     :model(),data(model)

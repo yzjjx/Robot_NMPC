@@ -494,3 +494,67 @@ mpc = rokae_mpc.MPCController(
 但是机器人只执行第一步 $ U_0^* $  
 
 假如控制器频率为100Hz，假如未来N=3，那么第一轮MPC看到的是10ms，20ms和30ms这三个未来时刻  
+
+
+# 构造函数与普通初始化函数的区别
+
+构造函数能够保证一个对象从刚创建出来的那一刻开始，就是合法、可用且完整的
+
+如果不加入构造函数，就需要一个init函数进行初始化，例如下面构造函数：
+
+```c++
+pinocchioFun::pinocchioFun(
+    const std::string& urdf_path)
+    :model(),data(model)
+{
+    DOF = 6; // 自由度
+    q_step = 1e-6; // 前向差分计算步长
+    dq_step = 1e-6;
+    tau_step = 1e-4;
+    
+    pinocchio::urdf::buildModel(urdf_path, model);
+    data = pinocchio::Data(model);
+}
+```
+
+上面的构造函数完全可以写成：
+
+```c++
+void pinocchioFun::init(const std::string& urdf_path)
+{
+    DOF = 6;
+
+    q_step = 1e-6;
+    dq_step = 1e-6;
+    tau_step = 1e-4;
+
+    pinocchio::urdf::buildModel(urdf_path, model);
+    data = pinocchio::Data(model);
+}
+```
+
+但是构造函数是自动且强制发生的，普通函数不是  
+如果使用普通函数，后续使用class的时候，代码应该是：
+```c++
+pinocchioFun dynamics;
+
+dynamics.init("sr4.urdf")
+```
+
+使用构造函数，后续代码是：
+```c++
+pinocchioFun dynamics("sr4.urdf")
+
+```
+
+# 函数功能详解
+文件：
+
+src\pinocchio_fun.cpp：  
+函数compute_aba(const Eigen::VectorXd& state,const Eigen::VectorXd& controldouble Ts)  
+用来输出下一时刻的状态next_state
+
+函数compute_held_state(const Eigen::VectorXd& state,const Eigen::VectorXd& control, double duration)  
+用来保持预测区间的输入，即假如控制频率为100Hz，在这个100Hz（0.01s）的duration内保持相同的控制力矩  
+step用来计算这一个控制频率区间里面有多少时间步，按照时间步进行差分计算，最后得到的predicted是0.01s之后的系统状态（state）
+

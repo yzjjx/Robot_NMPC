@@ -7,7 +7,7 @@
 #include <cmath>
 #include <stdexcept>
 
-// 建立构造函数
+// 建立构造函数，给定control_dt为预测区间，例如ROKAE_NMPC nmpc(dynamics, 0.01, 20);即控制频率为10ms，100Hz，向未来预测20个区间，预测时间为200ms
 ROKAE_NMPC::ROKAE_NMPC(pinocchioFun& dynamics, double control_dt, int prediction_steps)
     : dynamics(dynamics)
 {
@@ -31,13 +31,13 @@ ROKAE_NMPC::ROKAE_NMPC(pinocchioFun& dynamics, double control_dt, int prediction
     q_diag.tail(DOF) << 1, 1, 1, 1, 1, 1; // 关节速度权重
     Q = q_diag.asDiagonal(); // 状态权重矩阵，将列矩阵转换为对角矩阵
 
-    F = 2.0*Q; // 终端状态权重矩阵
+    F = 2.0*Q; // 终端状态权重矩阵，希望末端尽量接近目标
     R = 0.01*Eigen::MatrixXd::Identity(u_n, u_n); // 控制输入权重矩阵，不希望力矩修正太大 
 
     tau_lower = Eigen::VectorXd::Constant(u_n, -30); // 控制输入下界
     tau_upper = Eigen::VectorXd::Constant(u_n, 30); // 控制输入上界
 
-    // 预测状态序列,21个12维状态向量，即nominal_state[0]一直到nominal_state[21]，每一个nominal_state都是一个12维的向量
+    // 预测状态序列,21个12维状态向量，即nominal_state[0]一直到nominal_state[20]，每一个nominal_state都是一个12维的向量
     nominal_state.resize(N+1, Eigen::VectorXd::Zero(x_n)); 
     // 创建20个控制向量，20个6维控制向量
     nominal_tau.resize(N, Eigen::VectorXd::Zero(u_n));
@@ -48,8 +48,11 @@ ROKAE_NMPC::ROKAE_NMPC(pinocchioFun& dynamics, double control_dt, int prediction
     Mat_A.resize(N, Eigen::MatrixXd::Zero(x_n, x_n)); // 线性化状态矩阵
     Mat_B.resize(N, Eigen::MatrixXd::Zero(x_n, u_n)); // 线性化控制矩阵
 
+    // 保存QP算出来的名义力矩改变量
     delta_tau.resize(N, Eigen::VectorXd::Zero(u_n)); // 控制增量
+
     prediction_tau.resize(N, Eigen::VectorXd::Zero(u_n)); // 预测控制输入
+
     prediction_state.resize(N+1, Eigen::VectorXd::Zero(x_n)); // 预测状态序列，保存优化后预测的状态
 }
 
@@ -94,6 +97,7 @@ void ROKAE_NMPC::generate_nom_traj(
 }
 
 // 复用生成X_bar的函数，使用ABA计算得到预测状态序列X_bar，进行前向差分，这一步可以得到Mat_A[0]到Mat_A[19]和Mat_B[0]到Mat_B[19]
+// 也就是在名义状态附近线性化
 void ROKAE_NMPC::calculate_Mat_AB()
 {
     dynamics.com_Mat_A_B(
@@ -115,6 +119,7 @@ Eigen::VectorXd ROKAE_NMPC::compute_control(
     // 创建保存预测力矩的容器，20个6维控制向量
     std::vector<Eigen::VectorXd> control_ref(N, Eigen::VectorXd::Zero(u_n));
     // 使用RNEA计算参考力矩
+    // 如果参考轨迹能够完美实现，理论上的控制力矩大概是多少
     for(int i = 0;i < N;i++){
         control_ref[i] = dynamics.compute_rnea(
             state_ref[i].head(DOF), // 关节位置
@@ -147,9 +152,13 @@ Eigen::VectorXd ROKAE_NMPC::compute_control(
         N
     );
 
+    // 上面的状态可以拼成一个大向量
     Eigen::VectorXd nominal_X(N*x_n);
     Eigen::VectorXd nominal_U(N*u_n);
+    // 参考目标
     Eigen::VectorXd ref_X(N*x_n);
+
+    // RNEA计算出来的参考力矩
     Eigen::VectorXd ref_U(N*u_n);
 
     // .segment(开始位置, 长度)
@@ -163,7 +172,7 @@ Eigen::VectorXd ROKAE_NMPC::compute_control(
     // 因为名义轨迹从最新状态开始，所以delta_x0 = 0
     Eigen::VectorXd delta_x0 = current_state - nominal_state[0];
 
-    // 构造代价函数并且求解QP
+    // 构造代价函数并且求解QP，得到120个\Delta{U}^*
     Eigen::VectorXd delta_U = Prediction(
         delta_x0,
         nominal_X,
