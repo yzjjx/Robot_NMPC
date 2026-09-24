@@ -34,8 +34,8 @@ ROKAE_NMPC::ROKAE_NMPC(pinocchioFun& dynamics, double control_dt, int prediction
     F = 2.0*Q; // 终端状态权重矩阵
     R = 0.01*Eigen::MatrixXd::Identity(u_n, u_n); // 控制输入权重矩阵，不希望力矩修正太大 
 
-    tau_lower = Eigen::VectorXd::Constant(u_n, -300); // 控制输入下界
-    tau_upper = Eigen::VectorXd::Constant(u_n, 300); // 控制输入上界
+    tau_lower = Eigen::VectorXd::Constant(u_n, -30); // 控制输入下界
+    tau_upper = Eigen::VectorXd::Constant(u_n, 30); // 控制输入上界
 
     // 预测状态序列,21个12维状态向量，即nominal_state[0]一直到nominal_state[21]，每一个nominal_state都是一个12维的向量
     nominal_state.resize(N+1, Eigen::VectorXd::Zero(x_n)); 
