@@ -1,7 +1,7 @@
 #ifndef PINOCCHIO_FUN_H
 #define PINOCCHIO_FUN_H
 
-#include <eigen3/Eigen/Dense>
+#include <Eigen/Dense>
 #include <pinocchio/multibody/data.hpp>
 #include <pinocchio/multibody/model.hpp>
 #include <vector>
@@ -25,14 +25,14 @@ public:
         double tau_step
     );
 
-    // 使用Pinocchio计算RNEA得到关节力矩，写成函数主要用于判断维度是否正确
+    // RNEA输出不含重力的附加关节力矩；重力由机器人底层补偿。
     Eigen::VectorXd compute_rnea(
         const Eigen::VectorXd& q,
         const Eigen::VectorXd& dq,
         const Eigen::VectorXd& ddq
     );
 
-    // ABA计算与半隐式欧拉离散化结合，得到下一时刻的状态
+    // ABA使用同一无重力模型，与常加速度离散化结合得到下一时刻的状态。
     Eigen::VectorXd compute_aba(
         const Eigen::VectorXd& state,
         const Eigen::VectorXd& control,

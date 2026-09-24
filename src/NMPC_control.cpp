@@ -116,6 +116,23 @@ Eigen::VectorXd ROKAE_NMPC::compute_control(
     const std::vector<Eigen::VectorXd>& state_ref,
     const std::vector<Eigen::VectorXd>& ddq_ref
 ) {
+    last_qp_success = false;
+    if (current_state.size() != x_n || !current_state.allFinite() ||
+        state_ref.size() != static_cast<std::size_t>(N + 1) ||
+        ddq_ref.size() != static_cast<std::size_t>(N)) {
+        throw std::invalid_argument("Expected finite state (12), state_ref (N+1), ddq_ref (N).");
+    }
+    for (const auto& state : state_ref) {
+        if (state.size() != x_n || !state.allFinite()) {
+            throw std::invalid_argument("Each reference state must have 12 finite entries.");
+        }
+    }
+    for (const auto& acceleration : ddq_ref) {
+        if (acceleration.size() != u_n || !acceleration.allFinite()) {
+            throw std::invalid_argument("Each reference acceleration must have 6 finite entries.");
+        }
+    }
+
     // 创建保存预测力矩的容器，20个6维控制向量
     std::vector<Eigen::VectorXd> control_ref(N, Eigen::VectorXd::Zero(u_n));
     // 使用RNEA计算参考力矩
@@ -131,7 +148,6 @@ Eigen::VectorXd ROKAE_NMPC::compute_control(
     // 第一次使用RNEA计算得到的参考力矩初始化U_bar，后续周期使用上一个周期的最优控制序列向前移动一位
     if (first_control_cycle) {
         initial_nom_ctrl(control_ref);
-        first_control_cycle = false;
     } else {
         shift_nom_ctrl();
     }
@@ -186,6 +202,12 @@ Eigen::VectorXd ROKAE_NMPC::compute_control(
         u_n,
         &last_qp_success
     );
+    // C++实机入口同样必须拒绝失败结果，不能把零增量当成有效控制量。
+    if (!last_qp_success || !delta_U.allFinite()) {
+        last_qp_success = false;
+        throw std::runtime_error("MPC QP failed; no control torque produced.");
+    }
+    first_control_cycle = false;
 
     // U = U_bar + delta_U
     for(int i = 0;i<N;i++)

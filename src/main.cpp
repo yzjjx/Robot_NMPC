@@ -90,7 +90,7 @@ int main(int argc, char* argv[])
                 acceleration_reference);
 
             // 使用与控制器相同的周期模拟机器人向前运动一步
-            current_state = robot_dynamics.compute_aba(
+            current_state = robot_dynamics.compute_held_state(
                 current_state,
                 control,
                 Ts);

@@ -162,7 +162,7 @@ def main():
     if DURATION is not None:
         steps = min(steps, int(np.ceil(DURATION / dt)))
 
-    model.opt.gravity[:] = [0, 0, -9.81]  # 与 Pinocchio 控制模型一致。
+    model.opt.gravity[:] = [0, 0, 0]  # 模拟底层已补偿重力，与 Pinocchio 控制模型一致。
     if not CONTACTS:
         # 原 XML 的底座/第一连杆网格重叠；先评估自由空间动力学跟踪。
         model.opt.disableflags |= mujoco.mjtDisableBit.mjDSBL_CONTACT

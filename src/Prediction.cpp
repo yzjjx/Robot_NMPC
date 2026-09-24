@@ -2,6 +2,7 @@
 
 #include <qpOASES.hpp>
 #include <iostream>
+#include <stdexcept>
 #include <vector>
 
 // Eigen默认为列优先，而qpOASES要求输入为行优先，因此需要将Eigen矩阵转换为行优先存储
@@ -35,6 +36,9 @@ Eigen::VectorXd Prediction(
     bool* qp_success
 ) 
 {
+    if (qp_success) {
+        *qp_success = false;
+    }
     int nV = N*p;
 
     // 如果名义起点不等于实际测量状态，phi*delta_x0会修正所有状态预测
@@ -54,6 +58,9 @@ Eigen::VectorXd Prediction(
     {
         lb.segment(i*p,p) = tau_lower-nominal_U.segment(i*p,p);
         ub.segment(i*p,p) = tau_upper-nominal_U.segment(i*p,p);
+    }
+    if (!H_qp.allFinite() || !g_qp.allFinite() || !lb.allFinite() || !ub.allFinite()) {
+        throw std::runtime_error("QP matrices and bounds must be finite.");
     }
 
     std::vector<qpOASES::real_t> H_arr = Eigen2QpArray(H_qp);
@@ -77,17 +84,19 @@ Eigen::VectorXd Prediction(
 
     Eigen::VectorXd delta_U = Eigen::VectorXd::Zero(nV);
 
-    if(qp_success) {
-        *qp_success = (status == qpOASES::SUCCESSFUL_RETURN);
-    }
-
     if(status == qpOASES::SUCCESSFUL_RETURN)
     {
         std::vector<qpOASES::real_t> solution(nV);
-        problem.getPrimalSolution(solution.data());
-        delta_U = Eigen::Map<Eigen::VectorXd>(solution.data(),nV);
+        status = problem.getPrimalSolution(solution.data());
+        if (status == qpOASES::SUCCESSFUL_RETURN) {
+            using QpVector = Eigen::Matrix<qpOASES::real_t, Eigen::Dynamic, 1>;
+            delta_U = Eigen::Map<const QpVector>(solution.data(), nV).cast<double>();
+            if (qp_success) {
+                *qp_success = delta_U.allFinite();
+            }
+        }
     }
-    else{
+    if(status != qpOASES::SUCCESSFUL_RETURN) {
         std::cerr<<"求解失败，错误码："<<static_cast<int>(status)<<std::endl;
     }
 

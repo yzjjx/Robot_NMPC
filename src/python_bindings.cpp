@@ -63,7 +63,7 @@ public:
             accelerations[i] = ddq_ref.row(i).transpose();
 
         Eigen::VectorXd tau = controller.compute_control(state, states, accelerations);
-        // 原控制器失败时返回名义力矩；评估时必须明确报错，不能当成成功的 MPC。
+        // 控制器失败时会抛出异常；绑定层再检查输出，避免将无效力矩用于仿真。
         if(!controller.qp_success() || !tau.allFinite()) {
             throw std::runtime_error("MPC QP failed; tracking experiment stopped.");
         }

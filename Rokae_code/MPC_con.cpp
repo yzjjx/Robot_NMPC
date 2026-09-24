@@ -59,8 +59,10 @@ void writeLog(const std::string& filename,
 
 int main()
 {
-    const double control_dt = 0.05; // MPC控制周期：100ms，即10Hz
+    const double control_dt = 0.05; // MPC控制周期：50ms，即20Hz
     const double sample_dt = 0.001; // 轨迹采样周期和SDK发送周期：1ms
+
+    // 在输入的期望轨迹中隔着reference_stride行取一个参考点
     const int reference_stride = static_cast<int>(std::lround(control_dt / sample_dt));
     int solve_count = 0;
     int overrun_count = 0;
@@ -102,13 +104,16 @@ int main()
         }
         acceleration[last] = Eigen::VectorXd::Zero(6);
 
+        //----------------------------------------------------------------
+        // 输入动力学模型和控制器
         pinocchioFun dynamics("../urdf/ROKAE_SR4.urdf");
         ROKAE_NMPC controller(dynamics, control_dt, 14);
+        //----------------------------------------------------------------
+
         const int N = controller.horizon();
         std::vector<Eigen::VectorXd> state_ref(N + 1, Eigen::VectorXd::Zero(12));
         std::vector<Eigen::VectorXd> ddq_ref(N, Eigen::VectorXd::Zero(6));
         Eigen::VectorXd current_state(12);
-        const Eigen::VectorXd zero = Eigen::VectorXd::Zero(6);
 
         // 机器人连接
         std::string ip = "192.168.2.160";
@@ -158,10 +163,12 @@ int main()
         std::copy_n(trajectory.front().data(), 6, q_start.begin());
         rtCon->MoveJ(0.1, SDU_SR4.jointPos(ec), q_start);
 
+        // 电脑需要接收什么信息
         SDU_SR4.startReceiveRobotState(std::chrono::milliseconds(1),
             {RtSupportedFields::jointPos_m,
              RtSupportedFields::jointVel_m,
              RtSupportedFields::motorTau});
+
         Torque cmd(6);
         std::array<double, 6> q{}, dq{}, tau_measured{};
         int step = 0;
@@ -171,7 +178,7 @@ int main()
         std::vector<LogRow> logs(trajectory.size());
         int recorded_count = 0;
 
-        // 主线程每100ms调用一次MPC，预测参考点同样相隔100ms。
+        // 主线程计划每control_dt秒计算一次MPC，预测参考点使用相同间隔。
         auto compute_torque = [&](int reference_step) {
             for (int i = 0; i <= N; ++i) {
                 state_ref[i] = trajectory[std::min(reference_step + i * reference_stride, last)];
@@ -180,9 +187,14 @@ int main()
                 ddq_ref[i] = acceleration[std::min(reference_step + i * reference_stride, last)];
             }
 
-            // 只测量MPC计算耗时，不包含状态读取、重力扣除和指令发送。
+            // 只测量MPC计算耗时，不包含状态读取和指令发送。
             const auto solve_start = std::chrono::steady_clock::now();
+
+            //-----------------------------------------------------------
+            // 开始控制器的计算
             Eigen::VectorXd tau = controller.compute_control(current_state, state_ref, ddq_ref);
+            //-----------------------------------------------------------
+
             const double solve_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - solve_start).count();
 
@@ -191,7 +203,7 @@ int main()
             max_solve_ms = std::max(max_solve_ms, solve_ms);
             if (solve_ms > control_dt * 1000.0) ++overrun_count;
 
-            // 首次及每10次打印一次，正常情况下约每秒打印一次。
+            // 首次及每10次打印一次；control_dt=0.05时，正常约每0.5秒打印一次。
             if (solve_count == 1 || solve_count % 10 == 0) {
                 std::cout << "MPC第" << solve_count << "次计算：" << solve_ms
                           << " ms，平均：" << total_solve_ms / solve_count
@@ -200,28 +212,30 @@ int main()
                           << "ms：" << overrun_count << "次\n";
             }
 
-            // MPC包含重力；SDK已补偿重力和摩擦，故减去模型重力后发送。
-            tau -= dynamics.compute_rnea(current_state.head(6), zero, zero);
+            // MPC已输出不含重力的附加力矩，直接发送；重力由SDK补偿。
             return tau;
         };
 
         // 先算好初始力矩，再启动实时发送。
         SDU_SR4.getStateData(RtSupportedFields::jointPos_m, q);
         SDU_SR4.getStateData(RtSupportedFields::jointVel_m, dq);
+        // 将状态拼接成12维的向量
         for (int j = 0; j < 6; ++j) {
             current_state(j) = q[j];
             current_state(j + 6) = dq[j];
         }
         measured_state = current_state;
         const Eigen::VectorXd initial_tau = compute_torque(0);
+        // 保存第一次完整MPC求解的结果，启动SDK循环后再发送。
         std::copy_n(initial_tau.data(), 6, cmd.tau.begin());
 
-        // SDK线程每1ms读取状态、发送最近一次力矩，不执行MPC求解。
+        // 1. SDK线程：每1ms读取状态、记录数据，并返回最近一次算好的力矩。
         std::function<Torque(void)> callback = [&]() {
             SDU_SR4.getStateData(RtSupportedFields::jointPos_m, q);
             SDU_SR4.getStateData(RtSupportedFields::jointVel_m, dq);
             SDU_SR4.getStateData(RtSupportedFields::motorTau, tau_measured);
             std::lock_guard<std::mutex> lock(data_mutex);
+            // 锁内更新共享状态；主线程读取时不会读到更新了一半的数据。
             for (int j = 0; j < 6; ++j) {
                 measured_state(j) = q[j];
                 measured_state(j + 6) = dq[j];
@@ -233,55 +247,65 @@ int main()
                 logs[step].torque = tau_measured;
                 recorded_count = step + 1;
             }
-            if (step++ == last) {
+            if (step == last) {
                 cmd.setFinished();
                 finished = true;
             }
+            ++step; // 本次采样完成；下一次回调使用下一个编号。
             return cmd;
         };
 
+        // 2. 正常结束和异常退出都使用相同的停止步骤。
+        const auto stop_control = [&]() {
+            rtCon->stopLoop(); // 先停止回调，再结束运动和状态接收。
+            rtCon->stopMove();
+            SDU_SR4.stopReceiveRobotState();
+        };
+
         rtCon->setControlLoop(callback, 0, true); // 每次回调前自动更新关节状态
-        rtCon->startMove(RtControllerMode::torque);
         try {
-            const auto period = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            // Clock只是steady_clock的短名字，使用不受系统时间调整影响的时钟。
+            using Clock = std::chrono::steady_clock;
+            const auto period = std::chrono::duration_cast<Clock::duration>(
                 std::chrono::duration<double>(control_dt));
-            const auto start_time = std::chrono::steady_clock::now();
+            rtCon->startMove(RtControllerMode::torque);
+            const auto start_time = Clock::now();
             const auto finish_time = start_time + std::chrono::milliseconds(last + 1);
             auto next_solve = start_time + period;
             rtCon->startLoop(false); // SDK后台发送，主线程计算MPC
-            while (std::chrono::steady_clock::now() < finish_time) {
+
+            // 3. 主线程：等待 -> 复制状态 -> 计算MPC -> 更新力矩。
+            while (Clock::now() < finish_time) {
                 std::this_thread::sleep_until(std::min(next_solve, finish_time));
-                if (std::chrono::steady_clock::now() >= finish_time) break;
+                if (Clock::now() >= finish_time) break;
+
                 int reference_step;
                 {
                     std::lock_guard<std::mutex> lock(data_mutex);
                     if (finished) break;
                     current_state = measured_state;
                     reference_step = std::max(0, step - 1);
-                }
+                } // 离开花括号就释放锁，SDK可以继续更新状态和发送旧力矩。
 
                 const Eigen::VectorXd tau = compute_torque(reference_step);
+
                 {
                     std::lock_guard<std::mutex> lock(data_mutex);
                     std::copy_n(tau.data(), 6, cmd.tau.begin());
-                }
+                } // 发布新力矩，之后的SDK回调会取到它。
+
                 // 求解超时时跳过错过的周期，不连续补算。
                 do {
                     next_solve += period;
-                } while (next_solve < std::chrono::steady_clock::now());
+                } while (next_solve < Clock::now());
             }
-            rtCon->stopLoop();
-            rtCon->stopMove();
         } catch (...) {
-            // 先结束SDK线程，避免回调访问已销毁的局部变量。
-            rtCon->stopLoop();
-            rtCon->stopMove();
-            SDU_SR4.stopReceiveRobotState();
-            throw;
+            stop_control();
+            throw; // 清理后，把错误交给外层catch打印。
         }
-        SDU_SR4.stopReceiveRobotState();
+        stop_control();
 
-        // 控制结束后统一写文件，避免文件操作影响1ms实时发送线程。
+        // 4. 正常结束后统一写文件，避免文件操作影响1ms实时发送线程。
         writeLog(output_txt, logs, recorded_count);
 
         std::cout << "力矩控制结束，实际关节状态已保存到："
