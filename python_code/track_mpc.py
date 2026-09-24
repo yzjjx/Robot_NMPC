@@ -2,8 +2,6 @@
 
 from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
-# 保存计算结果
-import csv
 # 处理文件路径
 from pathlib import Path
 import time
@@ -23,9 +21,9 @@ VIEWER_HZ = 60.0  # 只控制画面刷新频率，不改变仿真和力矩输入
 HEADLESS = False       # False：显示 MuJoCo 窗口；True：不显示窗口。
 DURATION = None        # None：运行完整轨迹；也可以设置为需要运行的秒数。
 CONTACTS = False       # False：关闭接触；True：保留接触作用。
-MPC_PERIOD = 0.1       # MPC 控制周期，单位为秒。
-HORIZON = 10           # MPC 预测步数。
-OUTPUT_DIR = ROOT / "data_out" / "mpc_zoh"
+MPC_PERIOD = 0.1      # MPC 控制周期，单位为秒。
+HORIZON = 15           # MPC 预测步数。
+OUTPUT_DIR = ROOT / "data_out" 
 
 # 将轨迹文件整理成控制器能够使用的数据
 # dt为仿真周期，padding_steps为轨迹末尾补充多少个点
@@ -85,52 +83,18 @@ def solve_next(controller, state, held_tau, states, accelerations):
     predicted_state = controller.predict_state(
         state, held_tau, controller.timestep)
     tau = controller.compute_control(predicted_state, states, accelerations)
-    finished = time.perf_counter()
-
-    # 计算MPC控制器的时间
-    return tau, 1000 * (finished - start), finished
+    return tau, 1000 * (time.perf_counter() - start)
 
 
-# csv数据保存
-def save_results(rows, updates, output_dir, wall_elapsed, status):
-    """保存 CSV 数据，并在终端显示跟踪误差。"""
-    # 如果输出文件夹不存在，就创建输出文件夹
-    # output_dir = Path("Robot_NMPC/data_out/mpc_zoh")
+def save_results(rows, output_dir, wall_elapsed, status):
+    """保存实际关节位置和速度。"""
     output_dir.mkdir(parents=True, exist_ok=True)
-    # 判断updates这个列表是否为空
-    if updates:
-        # 如果是空就打开csv文件
-        with (output_dir / "mpc_updates.csv").open("w", newline="") as file:
-            writer = csv.DictWriter(file, fieldnames=list(updates[0]))
-            # 写入第一行作为表头
-            writer.writeheader()
-            # 写入所有记录
-            writer.writerows(updates)
-        # 统计MPC的计算时间
-        solve_times = np.array([item["solve_ms"] for item in updates])
-        # np.mean计算平均值
-        print(f"后台 MPC 平均/最大耗时：{np.mean(solve_times):.3f} / "
-              f"{np.max(solve_times):.3f} ms")
-
-    # 将仿真中的数据保存为tracking.csv，然后计算关节跟踪误差
     if rows:
-        # 将列表转换为二维数组
         result = np.asarray(rows)
-        # 创建csv文件的第一列名称，对应result的第0列
-        names = ["time_s"]
-        for prefix in ("q_ref_rad", "q_rad", "dq_ref_rad_s", "dq_rad_s", "tau_Nm"):
-            names += [f"{prefix}_{j+1}" for j in range(6)]
-        names += ["solve_ms", "cycle_ms"]
-        names += [f"{prefix}_{axis}" for prefix in ("tcp_ref_m", "tcp_m")
-                  for axis in ("x", "y", "z")]
-        names += ["torque_updated", "wall_lag_ms"]
-
+        names = (["time_s"] + [f"q_rad_{j+1}" for j in range(6)]
+                 + [f"dq_rad_s_{j+1}" for j in range(6)])
         np.savetxt(output_dir / "tracking.csv", result, delimiter=",",
                    header=",".join(names), comments="")
-
-        # 计算关节位置误差
-        error_deg = np.rad2deg(result[:, 7:13] - result[:, 1:7])
-
         print(f"仿真/实际运行时间：{result[-1, 0]:.3f} / {wall_elapsed:.3f} s")
     print(f"结果：{output_dir.resolve()}，状态：{status}")
 
@@ -170,18 +134,16 @@ def main():
         raise ValueError("当前控制器只支持 6 关节、6 力矩执行器模型。")
 
     data = mujoco.MjData(model)
-    reference_data = mujoco.MjData(model)
     data.qpos[:] = state_ref[0, :6]  # 从轨迹起点开始，避免混入初始定位误差。
     data.qvel[:] = state_ref[0, 6:]
     mujoco.mj_forward(model, data)
-    site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "tool_site")
-    if site_id < 0:
-        raise ValueError("MuJoCo 模型中缺少 tool_site。")
 
     # 启动计时前准备首个力矩，避免从零力矩开始等待一次求解。
+    solve_start = time.perf_counter()
     tau = controller.compute_control(
         state_ref[0], state_ref[reference_offsets], ddq_ref[reference_offsets[:-1]])
-    rows, updates = [], []
+    print(f"MPC t=0.000 s 耗时：{1000 * (time.perf_counter() - solve_start):.3f} ms")
+    rows = []
     status = "completed"
     window = nullcontext(None) if HEADLESS else mujoco.viewer.launch_passive(model, data)
     print(f"力矩输入目标：{1/dt:g} Hz，MPC 周期：{mpc_period:g} s，"
@@ -194,7 +156,6 @@ def main():
 
         # t=0时开始准备t=0.1秒的力矩。
         if next_control_step < steps:
-            pending_request_time = 0.0
             pending_target_step = next_control_step
             indices = pending_target_step + reference_offsets
             pending = worker.submit(
@@ -208,33 +169,24 @@ def main():
             # 以绝对时钟安排仿真步进，后台求解期间主循环照常运行。
             step_time = wall_start + k * dt
             time.sleep(max(0.0, step_time - time.perf_counter()))
-            cycle_start = time.perf_counter()
-            wall_lag_ms = 1000 * max(0.0, cycle_start - step_time)
-            solve_ms, updated = 0.0, int(k == 0)
 
             if k == next_control_step:
                 # 到达控制时刻：结果已完成就使用，否则继续保持旧力矩。
                 if pending is not None and pending.done():
                     try:
-                        tau, solve_ms, finished = pending.result()
+                        tau, solve_ms = pending.result()
                     except RuntimeError as error:
                         status = "qp_failed"
                         print(f"MPC 求解失败：{error}")
                         pending = None
                         break
-                    updated = 1
-                    updates.append({"request_time_s": pending_request_time,
-                                    "target_time_s": pending_target_step * dt,
-                                    "applied_time_s": k * dt,
-                                    "finished_wall_s": finished - wall_start,
-                                    "solve_ms": solve_ms, "applied": 1})
+                    print(f"MPC t={pending_target_step * dt:.3f} s 耗时：{solve_ms:.3f} ms")
                     pending = None
 
                 next_control_step += control_steps
 
                 # 后台空闲后，提前准备下一个控制时刻的力矩。
                 if pending is None and next_control_step < steps:
-                    pending_request_time = k * dt
                     pending_target_step = next_control_step
                     indices = pending_target_step + reference_offsets
                     pending = worker.submit(
@@ -250,17 +202,10 @@ def main():
                 status = "simulation_failed"
                 break
 
-            # 比较同一时刻：实际 x[k+1] 对应参考 x_ref[k+1]。
-            target = state_ref[k+1]
-            reference_data.qpos[:] = target[:6]
-            mujoco.mj_kinematics(model, reference_data)
-            cycle_ms = 1000 * (time.perf_counter() - cycle_start)
-            rows.append(np.r_[data.time, target[:6], data.qpos, target[6:], data.qvel,
-                              tau, solve_ms, cycle_ms,
-                              reference_data.site_xpos[site_id], data.site_xpos[site_id],
-                              updated, wall_lag_ms])
+            rows.append(np.r_[data.time, data.qpos, data.qvel])
 
             if (k+1) % round(1/dt) == 0:
+                target = state_ref[k+1]
                 print(f"t={data.time:.1f} s，最大关节误差="
                       f"{np.max(np.abs(np.rad2deg(data.qpos-target[:6]))):.4f} deg")
             # 仿真仍每 1 ms 前进一步；这里只把最新状态约每秒显示 60 次。
@@ -272,16 +217,12 @@ def main():
     # 关闭窗口/结束仿真时，收集仍在途的任务，但不再施加其力矩。
     if pending is not None:
         try:
-            _, solve_ms, finished = pending.result()
-            updates.append({"request_time_s": pending_request_time,
-                            "target_time_s": pending_target_step * dt,
-                            "applied_time_s": float("nan"),
-                            "finished_wall_s": finished-wall_start,
-                            "solve_ms": solve_ms, "applied": 0})
+            _, solve_ms = pending.result()
+            print(f"MPC t={pending_target_step * dt:.3f} s 耗时：{solve_ms:.3f} ms")
         except RuntimeError as error:
             status = "qp_failed"
             print(f"MPC 求解失败：{error}")
-    save_results(rows, updates, OUTPUT_DIR, wall_elapsed, status)
+    save_results(rows, OUTPUT_DIR, wall_elapsed, status)
     if status in ("qp_failed", "simulation_failed"):
         raise SystemExit(1)
 
