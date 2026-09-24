@@ -59,7 +59,7 @@ void writeLog(const std::string& filename,
 
 int main()
 {
-    const double control_dt = 0.1; // MPC控制周期：100ms，即10Hz
+    const double control_dt = 0.05; // MPC控制周期：100ms，即10Hz
     const double sample_dt = 0.001; // 轨迹采样周期和SDK发送周期：1ms
     const int reference_stride = static_cast<int>(std::lround(control_dt / sample_dt));
     int solve_count = 0;
@@ -67,14 +67,15 @@ int main()
     double total_solve_ms = 0.0;
     double max_solve_ms = 0.0;
     int exit_code = 0;
+    const std::string input_q = "../data_in/circle_R200_joint_trajectory_SR4_V50.txt";
+    const std::string output_txt = "../data_out/circle_R200_SR4.txt";
 
     try
     {
         // 文件每行：时间(s)、6个关节位置(rad)、6个关节速度(rad/s)。
-        // 从工程根目录 20260901_ROBOT_NMPC 运行。
-        std::ifstream file("Robot_NMPC/data_in/circle_R200_joint_trajectory_SR4_V50.txt");
+        std::ifstream file(input_q);
         if (!file) {
-            throw std::runtime_error("无法打开轨迹文件");
+            throw std::runtime_error("无法打开轨迹文件：" + input_q);
         }
         std::string header;
         std::getline(file, header);
@@ -101,8 +102,8 @@ int main()
         }
         acceleration[last] = Eigen::VectorXd::Zero(6);
 
-        pinocchioFun dynamics("Robot_NMPC/urdf/ROKAE_SR4.urdf");
-        ROKAE_NMPC controller(dynamics, control_dt, 40);
+        pinocchioFun dynamics("../urdf/ROKAE_SR4.urdf");
+        ROKAE_NMPC controller(dynamics, control_dt, 14);
         const int N = controller.horizon();
         std::vector<Eigen::VectorXd> state_ref(N + 1, Eigen::VectorXd::Zero(12));
         std::vector<Eigen::VectorXd> ddq_ref(N, Eigen::VectorXd::Zero(6));
@@ -281,10 +282,10 @@ int main()
         SDU_SR4.stopReceiveRobotState();
 
         // 控制结束后统一写文件，避免文件操作影响1ms实时发送线程。
-        writeLog("Robot_NMPC/data_out/actual_joint_state.txt", logs, recorded_count);
+        writeLog(output_txt, logs, recorded_count);
 
         std::cout << "力矩控制结束，实际关节状态已保存到："
-                  << "Robot_NMPC/data_out/actual_joint_state.txt" << std::endl;
+                  << output_txt << std::endl;
     }
     catch(const std::exception& e)
     {

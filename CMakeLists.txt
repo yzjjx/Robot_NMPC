@@ -9,6 +9,7 @@ list(APPEND CMAKE_PREFIX_PATH "/opt/openrobots")
 find_package(Eigen3 REQUIRED)
 find_package(qpOASES REQUIRED)
 find_package(pinocchio REQUIRED)
+find_package(Threads REQUIRED)
 
 add_library(mpc_core STATIC
     src/MPC_Matrices.cpp
@@ -37,8 +38,47 @@ target_link_libraries(
     ${qpOASES_LIBRARY}
 )
 
-add_executable(Robot_NMPC src/main.cpp)
+add_executable(Robot_NMPC 
+    src/main.cpp)
 target_link_libraries(Robot_NMPC PRIVATE mpc_core)
+
+# 珞石机器人实机控制程序。
+set(XCORE_SDK "/home/yzj_robot/xCoreSDK_cpp-v0.7.2" CACHE PATH
+    "Path to the xCoreSDK root directory")
+set(XCORE_LIB_DIR "${XCORE_SDK}/lib/Linux/x86_64")
+
+find_library(ROKAE_LIB
+    NAMES xCoreSDK
+    PATHS "${XCORE_LIB_DIR}"
+    NO_DEFAULT_PATH
+    REQUIRED
+)
+find_library(XMATE_MODEL_LIB
+    NAMES xMateModel
+    PATHS "${XCORE_LIB_DIR}"
+    NO_DEFAULT_PATH
+    REQUIRED
+)
+
+add_executable(MPC_con Rokae_code/MPC_con.cpp)
+target_include_directories(MPC_con PRIVATE "${XCORE_SDK}/include")
+target_link_libraries(MPC_con PRIVATE
+    mpc_core
+    ${ROKAE_LIB}
+    ${XMATE_MODEL_LIB}
+    Threads::Threads
+)
+
+# 笛卡尔 PD + 无重力 RNEA 力矩前馈，不依赖 MPC/QP 控制器。
+add_executable(Cartesian_PD_FF Rokae_code/Cartesian_PD_FF.cpp)
+target_include_directories(Cartesian_PD_FF PRIVATE "${XCORE_SDK}/include")
+target_link_libraries(Cartesian_PD_FF PRIVATE
+    Eigen3::Eigen
+    pinocchio::pinocchio
+    ${ROKAE_LIB}
+    ${XMATE_MODEL_LIB}
+    Threads::Threads
+)
 
 # 使用同一个控制器实现生成 Python 模块，不在 Python 中重写 MPC。
 option(BUILD_PYTHON_BINDINGS "Build the pybind11 controller module" ON)
