@@ -1,0 +1,6 @@
+# Ubuntu/Python 3.10+；使用 pip --only-binary=:all: 安装预编译包。
+numpy>=1.24
+scipy>=1.10
+osqp>=1.1,<2
+pin>=3,<4
+mujoco>=3,<4
