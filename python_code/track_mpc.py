@@ -10,7 +10,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
-from rokae_mpc import MPCController
+from rokae_mpc_v2 import MPCController
 
 # 输入路径
 ROOT = Path(__file__).resolve().parent.parent
@@ -21,8 +21,8 @@ VIEWER_HZ = 60.0  # 只控制画面刷新频率，不改变仿真和力矩输入
 HEADLESS = False       # False：显示 MuJoCo 窗口；True：不显示窗口。
 DURATION = None        # None：运行完整轨迹；也可以设置为需要运行的秒数。
 CONTACTS = False       # False：关闭接触；True：保留接触作用。
-MPC_PERIOD = 0.1      # MPC 控制周期，单位为秒。
-HORIZON = 15           # MPC 预测步数。
+MPC_PERIOD = 0.01      # MPC 控制周期，单位为秒。
+HORIZON = 25           # MPC 预测步数。
 OUTPUT_DIR = ROOT / "data_out" 
 
 # 将轨迹文件整理成控制器能够使用的数据

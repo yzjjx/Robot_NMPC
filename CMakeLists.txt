@@ -12,17 +12,17 @@ find_package(pinocchio REQUIRED)
 find_package(Threads REQUIRED)
 
 add_library(mpc_core STATIC
-    src/MPC_Matrices.cpp
-    src/NMPC_control.cpp
-    src/pinocchio_fun.cpp
-    src/Prediction.cpp
+    src_v2/MPC_Matrices.cpp
+    src_v2/NMPC_control.cpp
+    src_v2/pinocchio_fun.cpp
+    src_v2/Prediction.cpp
 )
 set_target_properties(mpc_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_include_directories(
     mpc_core
     PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include_v2
     # 需要添加Pinocchio的头文件
     /opt/openrobots/include
     # 添加qp
@@ -38,9 +38,9 @@ target_link_libraries(
     ${qpOASES_LIBRARY}
 )
 
-add_executable(Robot_NMPC 
-    src/main.cpp)
-target_link_libraries(Robot_NMPC PRIVATE mpc_core)
+# add_executable(Robot_NMPC 
+#     src/main.cpp)
+# target_link_libraries(Robot_NMPC PRIVATE mpc_core)
 
 # # 珞石机器人实机控制程序。
 # set(XCORE_SDK "/home/yzj_robot/xCoreSDK_cpp-v0.7.2" CACHE PATH
@@ -82,10 +82,10 @@ if(BUILD_PYTHON_BINDINGS)
     list(APPEND CMAKE_PREFIX_PATH "${PYBIND11_CMAKE_DIR}")
     set(PYBIND11_FINDPYTHON ON)
     find_package(pybind11 CONFIG REQUIRED)
-    pybind11_add_module(rokae_mpc src/python_bindings.cpp)
-    target_link_libraries(rokae_mpc PRIVATE mpc_core)
+    pybind11_add_module(rokae_mpc_v2 src_v2/python_bindings.cpp)
+    target_link_libraries(rokae_mpc_v2 PRIVATE mpc_core)
     # 与仿真脚本放在一起，可以直接 import rokae_mpc。
-    set_target_properties(rokae_mpc PROPERTIES
+    set_target_properties(rokae_mpc_v2 PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/python_code"
     )
 endif()
