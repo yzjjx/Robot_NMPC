@@ -10,7 +10,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
-from rokae_mpc_v2 import MPCController
+from rokae_mpc_v3 import MPCController
 
 # 输入路径
 ROOT = Path(__file__).resolve().parent.parent
