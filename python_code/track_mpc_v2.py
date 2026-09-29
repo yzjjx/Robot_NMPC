@@ -1,112 +1,133 @@
-"""简单的同步 MuJoCo 仿真。仿真在求解期间暂停，不代表实时/实物实验。"""
-import argparse
+"""v2：MuJoCo 逐步仿真，后台提前计算下一控制时刻的力矩。"""
+
 from contextlib import nullcontext
-from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 import time
 
 import mujoco
 import mujoco.viewer
 import numpy as np
-from rokae_mpc_v2 import MPCController
 
-ROOT = Path(__file__).resolve().parent.parent
+from mpc_sim_utils import (ROOT, advance, check_torque, create_simulation,
+                           limit_steps, load_reference, period_steps,
+                           save_results, write_csv)
+
+TRAJECTORY = ROOT / "data_in" / "circle_R200_joint_trajectory_SR4_V50.txt"
+HEADLESS = False
+DURATION = None
+CONTACTS = False
+VIEWER_HZ = 60.0
+REALTIME = False       # False：数值仿真，允许等待求解；True：按墙钟运行并检查超时。
+MPC_PERIOD = 0.01     # 0.01 s = 100 Hz；改成 0.02 s 即为 50 Hz。
+HORIZON = 25
+TORQUE_LIMIT = 10.0   # N·m；三个示例采用相同限幅，便于比较。
+OUTPUT_DIR = ROOT / "data_out" / "mpc_v2"
+
+
+def solve_next(controller, state, held_tau, states, accelerations):
+    """输入当前状态和旧力矩，输出下一时刻力矩及耗时统计。
+
+    state 前 6 项是 q，后 6 项是 dq。先预测旧力矩保持一个周期后的
+    状态，再求解该时刻的控制量；求出的力矩在下个控制时刻才使用。
+    """
+    start = time.perf_counter()
+    predicted = controller.predict_state(state, held_tau, controller.timestep)
+    tau = check_torque(controller.compute_control(predicted, states, accelerations))
+    timing = controller.timing  # 在同一个工作线程读取，避免与求解争用锁。
+    completed = time.perf_counter()
+    return tau, completed, [1000*(completed-start), timing.total_ms,
+                            timing.qp_ms, timing.qp_iterations]
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--period", type=float, default=0.1)
-    parser.add_argument("--horizon", type=int, default=15)
-    parser.add_argument("--duration", type=float, default=3.0)
-    parser.add_argument("--viewer", action="store_true")
-    parser.add_argument("--trajectory", type=Path,
-                        default=ROOT / "data_in/circle_R200_joint_trajectory_SR4_V50.txt")
-    parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parent / "results")
-    args = parser.parse_args()
-    if not np.isfinite(args.period) or args.period <= 0 or not np.isfinite(args.duration) or args.duration <= 0:
-        parser.error("period and duration must be finite and positive")
-    if args.horizon < 1:
-        parser.error("horizon must be positive")
+    from rokae_mpc_v2 import MPCController
 
-    model = mujoco.MjModel.from_xml_path(str(ROOT / "xml/ROKAE_SR4.XML"))
+    model, data = create_simulation(CONTACTS)
     dt = float(model.opt.timestep)
-    if not np.isfinite(dt) or dt <= 0:
-        raise ValueError("XML timestep must be finite and positive")
-    control_steps = round(args.period / dt)
-    if control_steps < 1 or not np.isclose(control_steps*dt, args.period, rtol=0, atol=1e-9):
-        parser.error("period must be an integer multiple of the XML timestep")
-    if (model.nq, model.nv, model.nu) != (6, 6, 6):
-        raise ValueError("Expected six joints and six torque actuators")
-    # 保持旧仿真约定：重力由底层补偿，关闭接触；不是实物安全模型。
-    model.opt.gravity[:] = 0
-    model.opt.disableflags |= mujoco.mjtDisableBit.mjDSBL_CONTACT
-    controller = MPCController(str(ROOT / "urdf/ROKAE_SR4.urdf"), args.period, args.horizon)
-
-    raw = np.loadtxt(args.trajectory, skiprows=1)
-    if raw.ndim != 2 or raw.shape[1] != 13 or len(raw) < 3 or not np.isfinite(raw).all():
-        raise ValueError("Expected time + six q + six dq columns, at least three rows")
-    timestamps = raw[:, 0] - raw[0, 0]
-    if np.any(np.diff(timestamps) <= 0):
-        raise ValueError("Reference timestamps must be strictly increasing")
-    acceleration = np.gradient(raw[:, 7:13], timestamps, axis=0, edge_order=2)
-
-    def reference_at(query):
-        states = np.column_stack([np.interp(query, timestamps, raw[:, j]) for j in range(1, 13)])
-        acc = np.column_stack([np.interp(query, timestamps, acceleration[:, j]) for j in range(6)])
-        states[query > timestamps[-1], 6:] = 0
-        acc[query > timestamps[-1]] = 0
-        return states, acc
-
-    data = mujoco.MjData(model)
-    data.qpos[:] = raw[0, 1:7]
-    data.qvel[:] = raw[0, 7:13]
+    control_steps = period_steps(MPC_PERIOD, dt)
+    if HORIZON < 1 or VIEWER_HZ <= 0 or not np.isfinite(TORQUE_LIMIT) or TORQUE_LIMIT <= 0:
+        raise ValueError("HORIZON、VIEWER_HZ、TORQUE_LIMIT 必须为正数。")
+    offsets = np.arange(HORIZON + 1) * control_steps
+    states, accelerations, steps = load_reference(
+        TRAJECTORY, dt, int(offsets[-1] + control_steps))
+    steps = limit_steps(steps, DURATION, dt)
+    controller = MPCController(str(ROOT / "urdf" / "ROKAE_SR4.urdf"),
+                               timestep=MPC_PERIOD, horizon=HORIZON,
+                               gravity_compensated=True, integration_step=dt)
+    controller.set_torque_limits(-np.ones(6)*TORQUE_LIMIT, np.ones(6)*TORQUE_LIMIT)
+    data.qpos[:], data.qvel[:] = states[0, :6], states[0, 6:]
     mujoco.mj_forward(model, data)
-    tau = np.zeros(6)
-    rows, timing_rows = [], []
-    steps = int(min(args.duration, timestamps[-1]) / dt)
-    if steps < 1:
-        raise ValueError("Requested simulation is shorter than one step")
-    window = mujoco.viewer.launch_passive(model, data) if args.viewer else nullcontext(None)
-    next_render = time.perf_counter()
-    with window as viewer:
-        for k in range(steps):
-            if viewer is not None and not viewer.is_running():
-                break
-            if k % control_steps == 0:
-                query = data.time + np.arange(args.horizon+1)*args.period
-                refs, acc = reference_at(query)
-                measured = np.r_[data.qpos, data.qvel]
-                start = time.perf_counter()
-                # 使用本次测量同步求解；失败即抛异常停止仿真，不采用过期结果。
-                tau = controller.compute_control(measured, refs, acc[:-1])
-                elapsed = 1000*(time.perf_counter()-start)
-                t = controller.timing
-                timing_rows.append([data.time, elapsed, t.reference_ms, t.dynamics_ms,
-                                    t.matrices_ms, t.qp_ms, t.qp_iterations])
-            data.ctrl[:] = tau
-            mujoco.mj_step(model, data)
-            if not np.isfinite(data.qpos).all() or not np.isfinite(data.qvel).all():
-                raise RuntimeError("Simulation became nonfinite")
-            rows.append(np.r_[data.time, data.qpos, data.qvel, tau])
-            if viewer is not None and time.perf_counter() >= next_render:
-                viewer.sync()
-                next_render = time.perf_counter()+1/60
 
-    if not timing_rows:
-        print("No control cycles completed.")
-        return
-    args.output.mkdir(parents=True, exist_ok=True)
-    tracking = np.asarray(rows)
-    np.savetxt(args.output / "tracking_v2.csv", tracking, delimiter=",",
-               header="time,"+",".join(f"{s}{j}" for s in ("q", "dq", "tau") for j in range(1,7)), comments="")
-    timing = np.asarray(timing_rows)
-    np.savetxt(args.output / "timing_v2.csv", timing, delimiter=",",
-               header="time,wall_ms,reference_ms,dynamics_ms,matrices_ms,qp_ms,qp_iterations", comments="")
-    refs, _ = reference_at(tracking[:, 0])
-    print("Joint RMSE [rad]:", np.sqrt(np.mean((tracking[:,1:7]-refs[:,:6])**2, axis=0)))
-    print(f"Compute mean/P99/max [ms]: {timing[:,1].mean():.3f} / "
-          f"{np.percentile(timing[:,1],99):.3f} / {timing[:,1].max():.3f}")
-    print(f"Compute-budget misses: {np.count_nonzero(timing[:,1] >= 1000*args.period)}/{len(timing)}")
-    print("Offline synchronous simulation; these numbers do not certify a real-time control rate.")
+    # 冷启动不占用第一个控制周期，但单独记录其耗时。
+    start = time.perf_counter()
+    tau = check_torque(controller.compute_control(
+        states[0], states[offsets], accelerations[offsets[:-1]]))
+    initial_ms = 1000*(time.perf_counter()-start)
+    timing = controller.timing
+    solve_rows = [[0, initial_ms, timing.total_ms, timing.qp_ms, timing.qp_iterations, 1]]
+    rows = []
+    failure = None
+    status = "completed"
+    pending = None
+    target_step = control_steps
+    window = nullcontext(None) if HEADLESS else mujoco.viewer.launch_passive(model, data)
+    print(f"v2：仿真步长 {dt:g} s，MPC {1/MPC_PERIOD:g} Hz，REALTIME={REALTIME}")
+    print("非实时模式允许暂停仿真等待计算，不能据此判断控制器是否达到目标频率。")
+    with window as viewer, ThreadPoolExecutor(max_workers=1) as worker:
+        wall_start = time.perf_counter()
+        next_render = wall_start
+        try:
+            for k in range(steps):
+                if viewer is not None and not viewer.is_running():
+                    status = "window_closed"
+                    break
+                if REALTIME:
+                    time.sleep(max(0.0, wall_start + k*dt - time.perf_counter()))
+
+                if k == target_step:
+                    if REALTIME and not pending.done():
+                        raise RuntimeError("v2 求解未赶上下一个控制时刻。")
+                    job, pending = pending, None
+                    new_tau, completed, timing_row = job.result()
+                    applied = not REALTIME or completed <= wall_start + k*dt
+                    solve_rows.append([k*dt, *timing_row, int(applied)])
+                    if not applied:
+                        raise RuntimeError("v2 结果已过期，停止仿真。")
+                    tau = new_tau
+                    target_step += control_steps
+
+                # 每个控制时刻只提交一个任务；工作线程不访问 MuJoCo 的可变状态。
+                if k % control_steps == 0 and target_step < steps:
+                    indices = target_step + offsets
+                    pending = worker.submit(
+                        solve_next, controller, np.r_[data.qpos, data.qvel], tau.copy(),
+                        states[indices], accelerations[indices[:-1]])
+
+                advance(model, data, tau, k, dt)
+                rows.append(np.r_[data.time, data.qpos, data.qvel, tau, states[k+1, :6]])
+                if viewer is not None and time.perf_counter() >= next_render:
+                    viewer.sync()
+                    next_render = time.perf_counter() + 1.0/VIEWER_HZ
+        except Exception as error:
+            failure = error
+            status = f"failed: {error}"
+        finally:
+            # 退出前收集后台任务；窗口关闭或超时时，不施加其输出。
+            if pending is not None:
+                try:
+                    _, _, timing_row = pending.result()
+                    solve_rows.append([target_step*dt, *timing_row, 0])
+                except Exception as error:
+                    if failure is None:
+                        failure = error
+                        status = f"failed: {error}"
+
+    save_results(rows, OUTPUT_DIR, time.perf_counter()-wall_start, status)
+    write_csv(OUTPUT_DIR / "solves.csv", solve_rows,
+              ["target_time_s", "predict_and_solve_ms", "cpp_solve_ms", "qp_ms",
+               "qp_iterations", "applied"])
+    if failure is not None:
+        raise RuntimeError(status) from failure
 
 
 if __name__ == "__main__":
