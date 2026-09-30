@@ -154,9 +154,11 @@ Linearization Dynamics::integrate_linearized(
     double duration
 )
 {
+    // 无意义，判断
     if (!state.allFinite() || !control.allFinite()) {
         throw std::invalid_argument("Nonfinite linearization input");
     }
+
     const int steps = step_count(duration);
     const double integration_dt = duration / steps;
     Linearization linearization{state, MatA::Identity(), MatB::Zero()};
@@ -168,7 +170,9 @@ Linearization Dynamics::integrate_linearized(
     for (int j = 0; j < steps; ++j) {
         // 先保存加速度，再计算同一个 (q,v,u) 点的解析导数。
         // 使用带 q/v/u 的完整接口，避免依赖不同 Pinocchio 版本的中间量复用约定。
+        // ABA得到当前加速度
         const Joint ddq = acceleration(linearization.next, control);
+        // 计算ABA对q、v和tau的偏导
         pinocchio::computeABADerivatives(
             model,
             data,
@@ -176,29 +180,42 @@ Linearization Dynamics::integrate_linearized(
             linearization.next.tail<DOF>(),
             control
         );
+        // 这里得到D_q = \frac{\partial \ddot{q}}{\partial q}，6*6矩阵
         const Eigen::Matrix<double, DOF, DOF> ddq_dq = data.ddq_dq;
+        // 关于v的偏导，6*6矩阵
         const Eigen::Matrix<double, DOF, DOF> ddq_dv = data.ddq_dv;
         // 某些版本只填 Minv 的上三角，必须恢复对称矩阵。
         const Eigen::Matrix<double, DOF, DOF> ddq_dtau = data.Minv.selfadjointView<Eigen::Upper>();
 
         // 对当前常加速度积分公式求导，而不是简单使用 I+h*Ac。
         MatA Mat_A_step;
+        // 矩阵左上角
         Mat_A_step.topLeftCorner<DOF, DOF>() = identity + (0.5 * integration_dt * integration_dt) * ddq_dq;
+        // 矩阵右上角
         Mat_A_step.topRightCorner<DOF, DOF>() =
             integration_dt * identity + (0.5 * integration_dt * integration_dt) * ddq_dv;
+        // 矩阵左下角
         Mat_A_step.bottomLeftCorner<DOF, DOF>() = integration_dt * ddq_dq;
+        // 矩阵右下角
         Mat_A_step.bottomRightCorner<DOF, DOF>() = identity + integration_dt * ddq_dv;
+
         MatB Mat_B_step;
+        // 矩阵上
         Mat_B_step.topRows<DOF>() = (0.5 * integration_dt * integration_dt) * ddq_dtau;
+        // 矩阵下
         Mat_B_step.bottomRows<DOF>() = integration_dt * ddq_dtau;
 
         // 链式法则：从小步的导数得到整个保持力矩区间的导数。
+        // 通过链式法则就能推导后续的A和B矩阵
         linearization.A = (Mat_A_step * linearization.A).eval();
         linearization.B = (Mat_A_step * linearization.B + Mat_B_step).eval();
         linearization.next = advance(linearization.next, ddq, integration_dt);
+
+        // 无意义判断
         if (!linearization.next.allFinite() || !linearization.A.allFinite() || !linearization.B.allFinite()) {
             throw std::runtime_error("Nonfinite state or sensitivity");
         }
+
     }
     return linearization;
 }
