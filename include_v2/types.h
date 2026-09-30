@@ -1,4 +1,5 @@
-#pragma once
+#ifndef MPC_V2_TYPES_H
+#define MPC_V2_TYPES_H
 
 #include <Eigen/Dense>
 #include <cmath>
@@ -14,24 +15,35 @@ using State = Eigen::Matrix<double, NX, 1>;
 using MatA = Eigen::Matrix<double, NX, NX>;
 using MatB = Eigen::Matrix<double, NX, DOF>;
 
-inline void require(bool ok, const char* message) {
-    if (!ok) throw std::invalid_argument(message);
+inline void require(
+    bool condition,
+    const char* message
+)
+{
+    if (!condition) {
+        throw std::invalid_argument(message);
+    }
 }
 
 // 构造函数分配内存前先检查参数。上界只是避免误输入造成超大分配。
-inline int checked_horizon(int n) {
-    require(n >= 1 && n <= 500, "horizon must be in [1, 500]");
-    return n;
+inline int checked_horizon(
+    int prediction_steps
+)
+{
+    require(prediction_steps >= 1 && prediction_steps <= 500, "horizon must be in [1, 500]");
+    return prediction_steps;
 }
 
 struct Timing {
     double reference_ms = 0;
-    double dynamics_ms = 0;   // 名义轨迹 + 解析线性化
-    double matrices_ms = 0;   // Gamma + QP 代价和上下界
+    double dynamics_ms = 0; // 名义轨迹 + 解析线性化
+    double matrices_ms = 0; // Gamma + QP 代价和上下界
     double qp_ms = 0;
-    double total_ms = 0;      // C++ compute_control 的墙钟时间
+    double total_ms = 0; // C++ compute_control 的墙钟时间
     int qp_iterations = 0;
     bool qp_success = false;
 };
 
 } // namespace mpc_v2
+
+#endif // MPC_V2_TYPES_H

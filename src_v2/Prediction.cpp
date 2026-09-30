@@ -3,84 +3,118 @@
 
 namespace mpc_v2 {
 
-Prediction::Prediction(int horizon, bool warm_start)
-    : n_(checked_horizon(horizon)*DOF), solver_(n_, 0), warm_start_(warm_start) {
-    for (auto& h : H_) h.resize(n_, n_);
-    g_.resize(n_);
-    lower_.resize(n_);
-    upper_.resize(n_);
-    solution_.resize(n_);
-    weighted_error_.resize(horizon*NX);
-    delta_.resize(n_);
+Prediction::Prediction(
+    int horizon,
+    bool warm_start
+)
+    : nV(checked_horizon(horizon) * DOF),
+      qp_solver(nV, 0),
+      use_warm_start(warm_start)
+{
+    for (auto& H_qp : H_buffer) {
+        H_qp.resize(nV, nV);
+    }
+    g_qp.resize(nV);
+    lb.resize(nV);
+    ub.resize(nV);
+    solution.resize(nV);
+    weighted_state_error.resize(horizon * NX);
+    delta_U.resize(nV);
     qpOASES::Options options;
     options.printLevel = qpOASES::PL_NONE;
-    solver_.setOptions(options);
+    qp_solver.setOptions(options);
 }
 
-void Prediction::reset() {
-    solver_.reset();
-    initialized_ = false;
-    prepared_ = false;
-    active_ = -1;
+void Prediction::reset()
+{
+    qp_solver.reset();
+    solver_initialized = false;
+    qp_prepared = false;
+    active_hessian_index = -1;
 }
 
-void Prediction::prepare(const MPCMatrices& m, const Eigen::VectorXd& error,
-                         const Eigen::VectorXd& nominal_u, const Eigen::VectorXd& reference_u,
-                         const Joint& lower, const Joint& upper) {
-    require(error.size() == m.Gamma.rows() && nominal_u.size() == n_ && reference_u.size() == n_,
-            "QP dimension mismatch");
-    prepared_ = false;
-    pending_ = (active_ == 0) ? 1 : 0;
-    auto& h = H_[pending_];
+void Prediction::prepare(
+    const MPCMatrices& mpc_matrices,
+    const Eigen::VectorXd& state_error,
+    const Eigen::VectorXd& nominal_U,
+    const Eigen::VectorXd& ref_U,
+    const Joint& tau_lower,
+    const Joint& tau_upper
+)
+{
+    require(
+        state_error.size() == mpc_matrices.Gamma.rows() && nominal_U.size() == nV && ref_U.size() == nV,
+        "QP dimension mismatch"
+    );
+    qp_prepared = false;
+    pending_hessian_index = (active_hessian_index == 0) ? 1 : 0;
+    auto& H_qp = H_buffer[pending_hessian_index];
     // 与旧版相同的目标函数、正则化；不降低精度、不放松力矩上下界。
-    h = (2.0*m.Gamma.transpose()*m.weighted_Gamma).cast<qpOASES::real_t>();
-    for (int i = 0; i < n_; ++i)
-        h(i, i) += static_cast<qpOASES::real_t>(2.0*m.control_weights(i) + 1e-6);
-    weighted_error_ = m.state_weights.cwiseProduct(error);
-    delta_.noalias() = m.Gamma.transpose()*weighted_error_;
-    delta_ += m.control_weights.cwiseProduct(nominal_u-reference_u);
-    g_ = (2.0*delta_).cast<qpOASES::real_t>();
-    for (int i = 0; i < n_; ++i) {
-        lower_(i) = static_cast<qpOASES::real_t>(lower(i % DOF)-nominal_u(i));
-        upper_(i) = static_cast<qpOASES::real_t>(upper(i % DOF)-nominal_u(i));
+    H_qp = (2.0 * mpc_matrices.Gamma.transpose() * mpc_matrices.weighted_Gamma).cast<qpOASES::real_t>();
+    for (int i = 0; i < nV; ++i) {
+        H_qp(i, i) += static_cast<qpOASES::real_t>(2.0 * mpc_matrices.control_weights(i) + 1e-6);
     }
-    if (!h.allFinite() || !g_.allFinite() || !lower_.allFinite() || !upper_.allFinite())
+    weighted_state_error = mpc_matrices.state_weights.cwiseProduct(state_error);
+    delta_U.noalias() = mpc_matrices.Gamma.transpose() * weighted_state_error;
+    delta_U += mpc_matrices.control_weights.cwiseProduct(nominal_U - ref_U);
+    g_qp = (2.0 * delta_U).cast<qpOASES::real_t>();
+    for (int i = 0; i < nV; ++i) {
+        lb(i) = static_cast<qpOASES::real_t>(tau_lower(i % DOF) - nominal_U(i));
+        ub(i) = static_cast<qpOASES::real_t>(tau_upper(i % DOF) - nominal_U(i));
+    }
+    if (!H_qp.allFinite() || !g_qp.allFinite() || !lb.allFinite() || !ub.allFinite()) {
         throw std::runtime_error("Nonfinite QP data");
-    prepared_ = true;
+    }
+    qp_prepared = true;
 }
 
-const Eigen::VectorXd& Prediction::solve() {
-    require(prepared_, "Call prepare before solve");
-    prepared_ = false;
-    iterations_ = 500; // 上限，不是每次必须迭代 500 次；不宣称硬实时。
+const Eigen::VectorXd& Prediction::solve()
+{
+    require(qp_prepared, "Call prepare before solve");
+    qp_prepared = false;
+    qp_iterations = 500; // 上限，不是每次必须迭代 500 次；不宣称硬实时。
     qpOASES::returnValue status;
-    if (initialized_ && warm_start_) {
-        status = solver_.hotstart(H_[pending_].data(), g_.data(),
-                                 static_cast<const qpOASES::real_t*>(nullptr),
-                                 lower_.data(), upper_.data(), nullptr, nullptr, iterations_);
+    if (solver_initialized && use_warm_start) {
+        status = qp_solver.hotstart(
+            H_buffer[pending_hessian_index].data(),
+            g_qp.data(),
+            static_cast<const qpOASES::real_t*>(nullptr),
+            lb.data(),
+            ub.data(),
+            nullptr,
+            nullptr,
+            qp_iterations
+        );
     } else {
-        solver_.reset();
-        status = solver_.init(H_[pending_].data(), g_.data(),
-                              static_cast<const qpOASES::real_t*>(nullptr),
-                              lower_.data(), upper_.data(), nullptr, nullptr, iterations_);
+        qp_solver.reset();
+        status = qp_solver.init(
+            H_buffer[pending_hessian_index].data(),
+            g_qp.data(),
+            static_cast<const qpOASES::real_t*>(nullptr),
+            lb.data(),
+            ub.data(),
+            nullptr,
+            nullptr,
+            qp_iterations
+        );
     }
-    if (status == qpOASES::SUCCESSFUL_RETURN)
-        status = solver_.getPrimalSolution(solution_.data());
-    if (status != qpOASES::SUCCESSFUL_RETURN || !solution_.allFinite()) {
+    if (status == qpOASES::SUCCESSFUL_RETURN) {
+        status = qp_solver.getPrimalSolution(solution.data());
+    }
+    if (status != qpOASES::SUCCESSFUL_RETURN || !solution.allFinite()) {
         reset();
         throw std::runtime_error("QP failed, qpOASES code=" + std::to_string(static_cast<int>(status)));
     }
-    delta_ = solution_.cast<double>();
+    delta_U = solution.cast<double>();
     // 失败时不把零向量/上一周期结果伪装成有效解。
     const double tolerance = 1e-5;
-    if ((solution_-lower_).minCoeff() < -tolerance ||
-        (upper_-solution_).minCoeff() < -tolerance) {
+    if ((solution - lb).minCoeff() < -tolerance || (ub - solution).minCoeff() < -tolerance) {
         reset();
         throw std::runtime_error("QP torque bounds violated");
     }
-    initialized_ = true;
-    active_ = pending_;
-    return delta_;
+    solver_initialized = true;
+    active_hessian_index = pending_hessian_index;
+    return delta_U;
 }
 
 } // namespace mpc_v2

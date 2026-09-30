@@ -152,7 +152,7 @@ Eigen::VectorXd ROKAE_NMPC::compute_control(
         shift_nom_ctrl();
     }
 
-    // 20次ABA计算得到名义预测状态序列X_bar
+    // 20次ABA计算得到名义预测状态序列X_bar，用机器人实际测量状态去计算
     generate_nom_traj(current_state);
 
     // 前向差分计算A和B矩阵
