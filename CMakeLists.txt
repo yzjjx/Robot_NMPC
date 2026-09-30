@@ -42,32 +42,32 @@ target_link_libraries(
 #     src/main.cpp)
 # target_link_libraries(Robot_NMPC PRIVATE mpc_core)
 
-# # 珞石机器人实机控制程序。
-# set(XCORE_SDK "/home/yzj_robot/xCoreSDK_cpp-v0.7.2" CACHE PATH
-#     "Path to the xCoreSDK root directory")
-# set(XCORE_LIB_DIR "${XCORE_SDK}/lib/Linux/x86_64")
+# 珞石机器人实机控制程序，使用 src_v2 控制器。
+set(XCORE_SDK "/home/yzj_robot/xCoreSDK_cpp-v0.7.2" CACHE PATH
+    "Path to the xCoreSDK root directory")
+set(XCORE_LIB_DIR "${XCORE_SDK}/lib/Linux/x86_64")
 
-# find_library(ROKAE_LIB
-#     NAMES xCoreSDK
-#     PATHS "${XCORE_LIB_DIR}"
-#     NO_DEFAULT_PATH
-#     REQUIRED
-# )
-# find_library(XMATE_MODEL_LIB
-#     NAMES xMateModel
-#     PATHS "${XCORE_LIB_DIR}"
-#     NO_DEFAULT_PATH
-#     REQUIRED
-# )
+find_library(ROKAE_LIB
+    NAMES xCoreSDK
+    PATHS "${XCORE_LIB_DIR}"
+    NO_DEFAULT_PATH
+    REQUIRED
+)
+find_library(XMATE_MODEL_LIB
+    NAMES xMateModel
+    PATHS "${XCORE_LIB_DIR}"
+    NO_DEFAULT_PATH
+    REQUIRED
+)
 
-# add_executable(MPC_con Rokae_code/MPC_con.cpp)
-# target_include_directories(MPC_con PRIVATE "${XCORE_SDK}/include")
-# target_link_libraries(MPC_con PRIVATE
-#     mpc_core
-#     ${ROKAE_LIB}
-#     ${XMATE_MODEL_LIB}
-#     Threads::Threads
-# )
+add_executable(MPC_con_v2 Rokae_code/MPC_con_v2.cpp)
+target_include_directories(MPC_con_v2 PRIVATE "${XCORE_SDK}/include")
+target_link_libraries(MPC_con_v2 PRIVATE
+    mpc_core
+    ${ROKAE_LIB}
+    ${XMATE_MODEL_LIB}
+    Threads::Threads
+)
 
 # 使用同一个控制器实现生成 Python 模块，不在 Python 中重写 MPC。
 option(BUILD_PYTHON_BINDINGS "Build the pybind11 controller module" ON)
